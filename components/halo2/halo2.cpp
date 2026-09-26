@@ -218,14 +218,9 @@ void Halo2::dump_config() {
 }
 
 void Halo2::queue_command_(uint8_t command) {
-  // Coalesce changes to both light entities into one complete radio packet.
-  // A mode/brightness command does not switch the lamp off. Keep the final
-  // power-off command when both light entities are turned off in one batch.
-  if (!state_.power && (command == 0x02 || pending_command_ == 0x02)) {
-    pending_command_ = 0x02;
-  } else if (pending_command_ != 0x03) {
-    pending_command_ = command;
-  }
+  // Mode/brightness commands do not change global power. Preserve a power
+  // command through the entire batch, in either direction.
+  if (pending_command_ != 0x02) pending_command_ = command;
 }
 
 void Halo2::control_light(light::LightState *light, bool front) {
@@ -255,7 +250,7 @@ void Halo2::control_light(light::LightState *light, bool front) {
   stored_brightness = brightness;
   state_.color_temperature = temperature;
   if (settings_changed || was_powered != state_.power) {
-    queue_command_(state_.power && settings_changed ? 0x03 : 0x02);
+    queue_command_(was_powered != state_.power ? 0x02 : 0x03);
     save_mode_();
     publish_switches_();
   }
@@ -337,10 +332,17 @@ void Halo2::update() {
   if (pending_command_ != 0) {
     const uint8_t command = pending_command_;
     pending_command_ = 0;
-    ESP_LOGD(TAG, "TX command 0x%02X, power %s, mode %u/%u", command, ONOFF(state_.power),
-             state_.front, state_.back);
-    const bool sent = halo2_radio::send_halo_state(command, state_.power, state_.pir, state_.front, state_.back,
-        state_.front_brightness, state_.back_brightness, state_.color_temperature, state_.packet_options);
+    const auto send = [&](uint8_t opcode) {
+      ESP_LOGD(TAG, "TX command 0x%02X, power %s, mode %u/%u", opcode, ONOFF(state_.power),
+               state_.front, state_.back);
+      return halo2_radio::send_halo_state(opcode, state_.power, state_.pir, state_.front, state_.back,
+          state_.front_brightness, state_.back_brightness, state_.color_temperature, state_.packet_options);
+    };
+    // Power-on must apply the final combined settings and explicitly switch
+    // the lamp on. Settings alone leave a powered-off lamp off.
+    bool sent = true;
+    if (command == 0x02 && state_.power) sent = send(0x03);
+    if (sent) sent = send(command);
     if (!sent) {
       status_set_warning();
       publish_status_(halo2_radio::last_error());

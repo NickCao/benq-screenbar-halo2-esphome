@@ -33,7 +33,7 @@ class Halo2 : public PollingComponent {
   bool accepts_commands() const { return ready_ && !publishing_ && !discovering_; }
   void control_light(light::LightState *light, bool front);
   void control_switch(bool power, bool value);
-  void resend() { if (accepts_commands()) queue_command_(state_.power ? 0x03 : 0x02); }
+  void resend() { if (accepts_commands()) queue_command_(0x02); }
 
  protected:
   void queue_command_(uint8_t command);
