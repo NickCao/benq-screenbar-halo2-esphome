@@ -1,0 +1,61 @@
+esphome:
+  name: screenbar-halo2
+  friendly_name: BenQ ScreenBar HALO 2
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [halo2]
+
+logger:
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  min_auth_mode: WPA2
+  ap:
+    ssid: "Halo2 recovery"
+    password: !secret fallback_password
+captive_portal:
+api:
+  reboot_timeout: 0s
+  encryption:
+    key: !secret api_encryption_key
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+halo2:
+  id: screenbar
+  front_light:
+    id: front_lamp
+    name: "Front lamp"
+    icon: mdi:desk-lamp
+    initial_state:
+      brightness: 12%
+      color_temperature: 3925 K
+  back_light:
+    id: back_lamp
+    name: "Back lamp"
+    icon: mdi:wall-sconce-flat-outline
+    initial_state:
+      brightness: 91%
+      color_temperature: 3925 K
+  power:
+    id: screenbar_power
+    name: "Power"
+  ultrasonic:
+    id: pir_switch
+    name: "Ultrasonic sensor"
+  radio_status:
+    id: radio_status
+    name: "Radio status"
+
+button:
+  - platform: template
+    name: "Resend current state"
+    entity_category: diagnostic
+    on_press:
+      - lambda: id(screenbar).resend();
+  - platform: restart
+    name: "Restart"
