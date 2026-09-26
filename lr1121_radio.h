@@ -16,9 +16,19 @@ template<class Transport> class Radio {
   bool ready() const { return ready_; }
   const char *last_error() const { return error_[0] ? error_ : nullptr; }
   uint16_t firmware_version() const { return firmware_version_; }
+  const halo2_protocol::Address &address() const { return address_; }
+  uint8_t channel() const { return channel_; }
+  bool discovering() const { return discovering_; }
+  uint32_t capture_count() const { return capture_count_; }
+  const std::array<uint8_t, 25> &capture_data() const { return capture_data_; }
 
-  bool setup(uint32_t deviation_hz = 160000, uint8_t pulse_shape = 0x09) {
+  bool setup(uint32_t deviation_hz = 160000, uint8_t pulse_shape = 0x09,
+             const halo2_protocol::Address &address = halo2_protocol::RADIO_ADDRESS,
+             uint8_t channel = halo2_protocol::RADIO_CHANNEL) {
     ready_ = false;
+    discovering_ = false;
+    address_ = address;
+    channel_ = channel;
     // 125 kbps + 2*fdev must fit inside the largest 467 kHz RX bandwidth.
     if (deviation_hz == 0 || deviation_hz >= 171000 ||
         (pulse_shape != 0 && (pulse_shape < 0x08 || pulse_shape > 0x0B)))
@@ -44,18 +54,18 @@ template<class Transport> class Radio {
     if (!read(0x010D, {}, errors, sizeof(errors))) return false;
     if (errors[0] || errors[1]) return fail("calibration failed");
 
-    constexpr uint32_t frequency = 2400000000UL + halo2_protocol::RADIO_CHANNEL * 1000000UL;
+    const uint32_t frequency = 2400000000UL + channel_ * 1000000UL;
     if (!write(0x020E, {0x01}) ||  // GFSK
         !write(0x020B, {byte(frequency, 24), byte(frequency, 16), byte(frequency, 8), byte(frequency, 0)}) ||
         !write(0x020F, {0x00, 0x01, 0xE8, 0x48, pulse_shape, 0x09,
                         byte(deviation_hz, 24), byte(deviation_hz, 16), byte(deviation_hz, 8), byte(deviation_hz, 0)}))
       return false;
     // 32-bit TX preamble, 8-bit RX preamble detection, 32-bit sync/address.
-    // Fixed 13-byte frames: PCF + payload + software CRC, with no whitening,
-    // hardware CRC, length byte, address filter, or automatic acknowledgement.
-    constexpr auto address = halo2_protocol::air_address();
-    if (!write(0x0210, {0x00, 0x20, 0x04, 0x20, 0x00, 0x00, 13, 0x01, 0x00}) ||
-        !write(0x0206, {address[0], address[1], address[2], address[3], 0, 0, 0, 0}) ||
+    // Fixed 14-byte captures: 9-bit PCF + payload + software CRC + padding.
+    // No whitening, hardware CRC, length byte, address filter, or auto-ACK.
+    const auto air = halo2_protocol::air_address(address_);
+    if (!write(0x0210, {0x00, 0x20, 0x04, 0x20, 0x00, 0x00, halo2_protocol::AIR_FRAME_SIZE, 0x01, 0x00}) ||
+        !write(0x0206, {air[0], air[1], air[2], air[3], 0, 0, 0, 0}) ||
         !write(0x0215, {0x02, 0x00, 0x04, 0x00}) ||  // HF PA, VREG, Waveshare duty cycle
         !write(0x0211, {0x00, 0x02}) ||  // 0 dBm, 48 us ramp
         !write(0x0213, {0x01}) ||  // fall back to STBY_RC
@@ -69,8 +79,8 @@ template<class Transport> class Radio {
     return true;
   }
 
-  bool send(const halo2_protocol::Frame &frame) {
-    if (!ready_) return false;
+  bool send(const halo2_protocol::AirFrame &frame) {
+    if (!ready_ || discovering_) return false;
     bool sent = false;
     if (write(0x011C, {0x00}) && clear_irq() &&
         write(0x0109, frame.data(), frame.size()) &&
@@ -98,11 +108,11 @@ template<class Transport> class Radio {
 
   bool poll(halo2_protocol::HaloRxState &state) {
     state = {};
-    if (!ready_ || !transport_.irq()) return false;
+    if (!ready_ || discovering_ || !transport_.irq()) return false;
     uint32_t irq = 0;
     if (!get_irq(irq)) return false;
     if (irq & (IRQ_ERROR | IRQ_CMD_ERROR)) return fail("radio error during RX");
-    halo2_protocol::Frame frame{};
+    halo2_protocol::AirFrame frame{};
     bool received = false;
     if (irq & IRQ_RX_DONE) {
       uint8_t buffer[2]{};
@@ -116,7 +126,52 @@ template<class Transport> class Radio {
     // Single RX holds the first frame until polling, so the lamp's immediate
     // reply cannot overwrite an authoritative controller request in the FIFO.
     if (!start_receive()) return false;
-    return received && halo2_protocol::decode_frame(frame.data(), frame.size(), state);
+    return received && halo2_protocol::decode_air_frame(frame.data(), frame.size(), state, address_);
+  }
+
+  bool listen_for_address(uint8_t channel, uint8_t sync_byte) {
+    discovering_ = true;
+    discovery_sync_ = sync_byte;
+    capture_count_ = 0;
+    if (!set_frequency(channel) ||
+        // No preamble gate; capture through the unknown address and full frame.
+        !write(0x0210, {0x00, 0x20, 0x00, 0x08, 0x00, 0x00, 24, 0x01, 0x00}) ||
+        !write(0x0206, {sync_byte, 0, 0, 0, 0, 0, 0, 0}) || !start_receive()) return false;
+    error_[0] = '\0';
+    return true;
+  }
+
+  bool poll_address(halo2_protocol::Address &address, halo2_protocol::HaloRxState &state) {
+    state = {};
+    if (!ready_ || !discovering_ || !transport_.irq()) return false;
+    uint32_t irq = 0;
+    if (!get_irq(irq)) return false;
+    if (irq & (IRQ_ERROR | IRQ_CMD_ERROR)) return fail("radio error during discovery");
+    bool received = false;
+    if (irq & IRQ_RX_DONE) {
+      uint8_t buffer[2]{};
+      if (!read(0x0203, {}, buffer, sizeof(buffer))) return false;
+      if (buffer[0] == 24) {
+        // Include the sync byte: it may overlap the first address bits.
+        capture_data_[0] = discovery_sync_;
+        if (!read(0x010A, {buffer[1], buffer[0]}, capture_data_.data() + 1, 24)) return false;
+        ++capture_count_;
+        received = true;
+      }
+    }
+    if (!start_receive()) return false;
+    return received && halo2_protocol::discover_address(capture_data_.data(), capture_data_.size(), address, state);
+  }
+
+  bool use_address(const halo2_protocol::Address &address, uint8_t channel) {
+    const auto air = halo2_protocol::air_address(address);
+    if (!set_frequency(channel) ||
+        !write(0x0210, {0x00, 0x20, 0x04, 0x20, 0x00, 0x00, halo2_protocol::AIR_FRAME_SIZE, 0x01, 0x00}) ||
+        !write(0x0206, {air[0], air[1], air[2], air[3], 0, 0, 0, 0}) || !start_receive()) return false;
+    address_ = address;
+    discovering_ = false;
+    error_[0] = '\0';
+    return true;
   }
 
  private:
@@ -126,6 +181,12 @@ template<class Transport> class Radio {
   static constexpr uint32_t IRQ_MASK = IRQ_TX_DONE | IRQ_RX_DONE | IRQ_TIMEOUT | IRQ_CMD_ERROR | IRQ_ERROR;
   Transport &transport_;
   bool ready_ = false;
+  bool discovering_ = false;
+  halo2_protocol::Address address_{halo2_protocol::RADIO_ADDRESS};
+  uint8_t channel_{halo2_protocol::RADIO_CHANNEL};
+  uint8_t discovery_sync_{0xAA};
+  uint32_t capture_count_{0};
+  std::array<uint8_t, 25> capture_data_{};
   uint16_t firmware_version_ = 0;
   char error_[96] = "LR1121 not initialized";
 
@@ -188,6 +249,13 @@ template<class Transport> class Radio {
     return true;
   }
   bool clear_irq() { return write(0x0114, {0xFF, 0xFF, 0xFF, 0xFF}); }
+  bool set_frequency(uint8_t channel) {
+    const uint32_t frequency = 2400000000UL + channel * 1000000UL;
+    if (!write(0x011C, {0x00}) ||
+        !write(0x020B, {byte(frequency, 24), byte(frequency, 16), byte(frequency, 8), byte(frequency, 0)})) return false;
+    channel_ = channel;
+    return true;
+  }
   bool start_receive() {
     return clear_irq() && write(0x011C, {0x00}) && write(0x010B, {}) && write(0x0209, {0, 0, 0});
   }

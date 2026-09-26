@@ -186,9 +186,9 @@ inline uint16_t halo_last_crc=0;
 
 inline bool send_halo_state(uint8_t command,bool power,bool pir,bool front,bool back,
                             uint8_t front_brightness,uint8_t back_brightness,
-                            uint16_t color_temperature){
+                            uint16_t color_temperature,uint8_t packet_options=0x01){
   const auto payload=halo2_protocol::make_payload(command,power,pir,front,back,
-    front_brightness,back_brightness,color_temperature);
+    front_brightness,back_brightness,color_temperature,packet_options);
   halo_last_pcf=halo2_protocol::request_pcf(halo_app_pid++);
   halo_last_crc=halo_crc(halo_last_pcf,payload.data(),payload.size());
   const bool ok=send_direct_stock_clocked(0,false,false,false,payload.data(),halo_last_pcf);

@@ -1,6 +1,11 @@
 # Waveshare ESP32-S3-LR1121-HF, using its onboard 2.4 GHz radio.
 halo2:
   radio: LR1121
+  auto_discover: true
+  radio_address_sensor:
+    name: "Radio address"
+  discover_button:
+    name: "Discover lamp address"
   # RF defaults for the BM5602's 125 kbps mode. Confirm on real hardware.
   frequency_deviation_hz: 160000
   # LR1121 Gaussian BT=0.5 (0x00 disables pulse shaping).

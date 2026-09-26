@@ -75,18 +75,21 @@ inline Radio<EspIdfTransport> radio(transport);
 inline uint8_t halo_app_pid = 0, halo_last_pcf = 0;
 inline uint16_t halo_last_crc = 0;
 inline const char *last_error() { return radio.last_error(); }
-inline bool setup(uint32_t deviation_hz = 160000, uint8_t pulse_shape = 0x09) {
-  return radio.setup(deviation_hz, pulse_shape);
+inline bool setup(uint32_t deviation_hz = 160000, uint8_t pulse_shape = 0x09,
+                  const halo2_protocol::Address &address = halo2_protocol::RADIO_ADDRESS,
+                  uint8_t channel = halo2_protocol::RADIO_CHANNEL) {
+  return radio.setup(deviation_hz, pulse_shape, address, channel);
 }
 inline bool poll_halo_receive(HaloRxState &state) { return radio.poll(state); }
 inline bool send_halo_state(uint8_t command, bool power, bool pir, bool front, bool back,
-                            uint8_t front_brightness, uint8_t back_brightness, uint16_t color_temperature) {
+                            uint8_t front_brightness, uint8_t back_brightness, uint16_t color_temperature,
+                            uint8_t packet_options = 0x01) {
   if (!radio.ready()) return false;
   const auto payload = halo2_protocol::make_payload(command, power, pir, front, back,
-                                                   front_brightness, back_brightness, color_temperature);
+                                                   front_brightness, back_brightness, color_temperature, packet_options);
   halo_last_pcf = halo2_protocol::request_pcf(halo_app_pid++);
-  const auto frame = halo2_protocol::make_frame(halo_last_pcf, payload);
-  halo_last_crc = static_cast<uint16_t>((frame[11] << 8U) | frame[12]);
+  const auto frame = halo2_protocol::make_air_frame(halo_last_pcf, payload, radio.address());
+  halo_last_crc = halo2_protocol::halo_crc(halo_last_pcf, payload.data(), payload.size(), radio.address(), true);
   return radio.send(frame);
 }
 }  // namespace lr1121_halo2

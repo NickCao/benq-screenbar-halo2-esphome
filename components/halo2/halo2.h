@@ -2,6 +2,7 @@
 
 #include "esphome/core/component.h"
 #include "esphome/core/preferences.h"
+#include "esphome/components/button/button.h"
 #include "esphome/components/light/light_output.h"
 #include "esphome/components/switch/switch.h"
 #include "esphome/components/text_sensor/text_sensor.h"
@@ -13,6 +14,7 @@ class Halo2 : public PollingComponent {
  public:
   void setup() override;
   void update() override;
+  void loop() override;
   void dump_config() override;
   float get_setup_priority() const override { return setup_priority::LATE; }
 
@@ -22,11 +24,16 @@ class Halo2 : public PollingComponent {
   void set_power_switch(switch_::Switch *value) { power_switch_ = value; }
   void set_ultrasonic_switch(switch_::Switch *value) { ultrasonic_switch_ = value; }
   void set_radio_status(text_sensor::TextSensor *value) { radio_status_ = value; }
+  void set_radio_address_sensor(text_sensor::TextSensor *value) { radio_address_sensor_ = value; }
+  void set_auto_discover(bool value) { auto_discover_ = value; }
+  void set_radio_address(const halo2_protocol::Address &value) { radio_address_ = value; address_configured_ = true; }
+  void set_radio_channel(uint8_t value) { radio_channel_ = value; }
+  void start_discovery();
 
-  bool accepts_commands() const { return ready_ && !publishing_; }
+  bool accepts_commands() const { return ready_ && !publishing_ && !discovering_; }
   void control_light(light::LightState *light, bool front);
   void control_switch(bool power, bool value);
-  void resend() { if (ready_) queue_command_(0x03); }
+  void resend() { if (accepts_commands()) queue_command_(state_.power ? 0x03 : 0x02); }
 
  protected:
   void queue_command_(uint8_t command);
@@ -36,13 +43,38 @@ class Halo2 : public PollingComponent {
   void publish_switches_();
   void publish_status_(const char *status);
   void save_mode_();
+  void publish_address_();
+  bool scan_channel_();
+
+  struct SavedLink {
+    halo2_protocol::Address address{};
+    uint8_t channel{0};
+    uint8_t version{0};
+    uint8_t packet_options{0x01};
+    uint8_t reserved{0};
+  };
+  struct Candidate {
+    halo2_protocol::Address address{};
+    uint8_t channel{0};
+    uint8_t count{0};
+  };
 
   light::LightState *front_light_{nullptr};
   light::LightState *back_light_{nullptr};
   switch_::Switch *power_switch_{nullptr};
   switch_::Switch *ultrasonic_switch_{nullptr};
   text_sensor::TextSensor *radio_status_{nullptr};
+  text_sensor::TextSensor *radio_address_sensor_{nullptr};
   ESPPreferenceObject mode_preference_;
+  ESPPreferenceObject link_preference_;
+  halo2_protocol::Address radio_address_{halo2_protocol::RADIO_ADDRESS};
+  std::array<Candidate, 4> candidates_{};
+  uint32_t scan_started_{0};
+  uint8_t scan_step_{0};
+  uint8_t radio_channel_{halo2_protocol::RADIO_CHANNEL};
+  bool address_configured_{false};
+  bool auto_discover_{false};
+  bool discovering_{false};
   halo2_protocol::HaloRxState state_;
   uint32_t frequency_deviation_{160000};
   uint8_t pulse_shape_{0x09};
@@ -85,6 +117,15 @@ class Halo2Switch : public switch_::Switch {
   void write_state(bool value) override { parent_->control_switch(power_, value); }
   Halo2 *parent_;
   bool power_;
+};
+
+class Halo2DiscoverButton : public button::Button {
+ public:
+  explicit Halo2DiscoverButton(Halo2 *parent) : parent_(parent) {}
+
+ protected:
+  void press_action() override { parent_->start_discovery(); }
+  Halo2 *parent_;
 };
 
 }  // namespace esphome::halo2

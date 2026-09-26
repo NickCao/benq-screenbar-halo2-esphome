@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 
 #ifdef USE_HALO2_LR1121
@@ -35,6 +36,7 @@ light::LightTraits Halo2Light::get_traits() {
 }
 
 void Halo2::setup() {
+  disable_loop();
   // LightState restores its preferences before this component is initialized.
   // Restore the bridge's last known state without transmitting on boot.
   const auto &front = front_light_->remote_values;
@@ -53,14 +55,29 @@ void Halo2::setup() {
   publish_switches_();
 
 #ifdef USE_HALO2_LR1121
-  ready_ = halo2_radio::setup(frequency_deviation_, pulse_shape_);
+  link_preference_ = global_preferences->make_preference<SavedLink>(0x48414C33);
+  SavedLink saved{};
+  const bool restored = !address_configured_ && link_preference_.load(&saved) && saved.version == 2 &&
+                        saved.packet_options <= 1 &&
+                        (saved.channel == 5 || saved.channel == 46 || saved.channel == 75);
+  if (restored) {
+    radio_address_ = saved.address;
+    radio_channel_ = saved.channel;
+    state_.packet_options = saved.packet_options;
+  }
+  ready_ = halo2_radio::setup(frequency_deviation_, pulse_shape_, radio_address_, radio_channel_);
   if (!ready_) {
     publish_status_(halo2_radio::last_error());
     mark_failed();
     return;
   }
   ESP_LOGI(TAG, "LR1121 firmware %04X, %u MHz GFSK", halo2_radio::radio.firmware_version(),
-           2400U + halo2_protocol::RADIO_CHANNEL);
+           2400U + radio_channel_);
+  if (auto_discover_ && !address_configured_ && !restored) {
+    start_discovery();
+    return;
+  }
+  publish_address_();
 #else
   const auto version = halo2_radio::setup_exact_pico(halo2_protocol::RADIO_ADDRESS, halo2_protocol::RADIO_CHANNEL);
   if (version != std::array<uint8_t, 3>{0x56, 0x02, 0x01}) {
@@ -75,6 +92,120 @@ void Halo2::setup() {
   publish_status_("Listening");
 }
 
+void Halo2::publish_address_() {
+  char address[80];
+  snprintf(address, sizeof(address), "%02X:%02X:%02X:%02X / %u MHz", radio_address_[0], radio_address_[1],
+           radio_address_[2], radio_address_[3], 2400U + radio_channel_);
+  if (radio_address_sensor_ != nullptr) radio_address_sensor_->publish_state(address);
+  ESP_LOGI(TAG, "Radio address %s (register order)", address);
+}
+
+void Halo2::start_discovery() {
+#ifdef USE_HALO2_LR1121
+  if (!ready_) return;
+  pending_command_ = 0;
+  candidates_ = {};
+  scan_step_ = 0;
+  discovering_ = true;
+  ESP_LOGI(TAG, "Discovery: adjust the controller brightness near the board");
+  if (scan_channel_()) enable_loop();
+#endif
+}
+
+bool Halo2::scan_channel_() {
+#ifdef USE_HALO2_LR1121
+  static constexpr uint8_t channels[]{5, 46, 75};
+  const uint8_t channel = channels[scan_step_ / 2];
+  const uint8_t sync = scan_step_ % 2 == 0 ? 0xAA : 0x55;
+  if (!halo2_radio::radio.listen_for_address(channel, sync)) {
+    ready_ = false;
+    disable_loop();
+    status_set_error();
+    publish_status_(halo2_radio::last_error());
+    return false;
+  }
+  scan_started_ = millis();
+  char status[80];
+  snprintf(status, sizeof(status), "Discovering at %u MHz; adjust controller brightness", 2400U + channel);
+  publish_status_(status);
+  ESP_LOGD(TAG, "Scanning %u MHz, preamble %02X", 2400U + channel, sync);
+  return true;
+#else
+  return false;
+#endif
+}
+
+void Halo2::loop() {
+#ifdef USE_HALO2_LR1121
+  if (!ready_ || !discovering_) return;
+  halo2_protocol::Address address{};
+  halo2_protocol::HaloRxState received;
+  const uint32_t previous_count = halo2_radio::radio.capture_count();
+  const bool found = halo2_radio::radio.poll_address(address, received);
+  if (halo2_radio::radio.capture_count() != previous_count) {
+    const auto &data = halo2_radio::radio.capture_data();
+    ESP_LOGV(TAG, "Discovery RX: %s", format_hex_pretty(data.data(), data.size()).c_str());
+  }
+  if (found) {
+    const uint8_t channel = halo2_radio::radio.channel();
+    Candidate *candidate = nullptr;
+    for (auto &entry : candidates_) {
+      if (entry.count != 0 && entry.address == address && entry.channel == channel) {
+        candidate = &entry;
+        break;
+      }
+    }
+    if (candidate == nullptr) {
+      candidate = &*std::min_element(candidates_.begin(), candidates_.end(),
+                                    [](const Candidate &a, const Candidate &b) { return a.count < b.count; });
+      *candidate = {address, channel, 0};
+    }
+    ++candidate->count;
+    ESP_LOGI(TAG, "Discovery candidate %02X:%02X:%02X:%02X at %u MHz: %u/3 CRC-valid captures",
+             address[0], address[1], address[2], address[3], 2400U + channel, candidate->count);
+    ESP_LOGD(TAG, "Captured state: front %u%%, rear %u%%, %u K, mode %u/%u", received.front_brightness,
+             received.back_brightness, received.color_temperature, received.front, received.back);
+    if (candidate->count >= 3) {
+      if (!halo2_radio::radio.use_address(address, channel)) {
+        ready_ = false;
+        disable_loop();
+        status_set_error();
+        publish_status_(halo2_radio::last_error());
+        return;
+      }
+      radio_address_ = address;
+      radio_channel_ = channel;
+      discovering_ = false;
+      disable_loop();
+      const SavedLink saved{address, channel, 2, received.packet_options, 0};
+      const bool persisted = link_preference_.save(&saved) && global_preferences->sync();
+      state_ = received;
+      save_mode_();
+      publish_lights_();
+      publish_switches_();
+      publish_address_();
+      publish_status_(persisted ? "Address discovered and saved" : "Address discovered; save failed");
+      if (!persisted) status_set_warning();
+      ESP_LOGI(TAG, "Discovery complete. radio_address: [0x%02X, 0x%02X, 0x%02X, 0x%02X], radio_channel: %u",
+               address[0], address[1], address[2], address[3], channel);
+      return;
+    }
+  }
+  if (const char *error = halo2_radio::last_error()) {
+    ready_ = false;
+    disable_loop();
+    status_set_error();
+    publish_status_(error);
+    return;
+  }
+  if (millis() - scan_started_ >= 3000) {
+    ESP_LOGD(TAG, "Discovery captured %u buffers", halo2_radio::radio.capture_count());
+    scan_step_ = (scan_step_ + 1) % 6;
+    scan_channel_();
+  }
+#endif
+}
+
 void Halo2::dump_config() {
   ESP_LOGCONFIG(TAG, "ScreenBar HALO 2:");
 #ifdef USE_HALO2_LR1121
@@ -82,13 +213,19 @@ void Halo2::dump_config() {
 #else
   ESP_LOGCONFIG(TAG, "  Radio: BM5602");
 #endif
-  ESP_LOGCONFIG(TAG, "  Frequency: %u MHz", 2400U + halo2_protocol::RADIO_CHANNEL);
+  ESP_LOGCONFIG(TAG, "  Frequency: %u MHz", 2400U + radio_channel_);
   LOG_UPDATE_INTERVAL(this);
 }
 
 void Halo2::queue_command_(uint8_t command) {
   // Coalesce changes to both light entities into one complete radio packet.
-  if (pending_command_ != 0x03) pending_command_ = command;
+  // A mode/brightness command does not switch the lamp off. Keep the final
+  // power-off command when both light entities are turned off in one batch.
+  if (!state_.power && (command == 0x02 || pending_command_ == 0x02)) {
+    pending_command_ = 0x02;
+  } else if (pending_command_ != 0x03) {
+    pending_command_ = command;
+  }
 }
 
 void Halo2::control_light(light::LightState *light, bool front) {
@@ -118,7 +255,7 @@ void Halo2::control_light(light::LightState *light, bool front) {
   stored_brightness = brightness;
   state_.color_temperature = temperature;
   if (settings_changed || was_powered != state_.power) {
-    queue_command_(settings_changed ? 0x03 : 0x02);
+    queue_command_(state_.power && settings_changed ? 0x03 : 0x02);
     save_mode_();
     publish_switches_();
   }
@@ -196,12 +333,14 @@ void Halo2::save_mode_() {
 }
 
 void Halo2::update() {
-  if (!ready_) return;
+  if (!ready_ || discovering_) return;
   if (pending_command_ != 0) {
     const uint8_t command = pending_command_;
     pending_command_ = 0;
+    ESP_LOGD(TAG, "TX command 0x%02X, power %s, mode %u/%u", command, ONOFF(state_.power),
+             state_.front, state_.back);
     const bool sent = halo2_radio::send_halo_state(command, state_.power, state_.pir, state_.front, state_.back,
-        state_.front_brightness, state_.back_brightness, state_.color_temperature);
+        state_.front_brightness, state_.back_brightness, state_.color_temperature, state_.packet_options);
     if (!sent) {
       status_set_warning();
       publish_status_(halo2_radio::last_error());
@@ -215,6 +354,12 @@ void Halo2::update() {
 
   halo2_protocol::HaloRxState received;
   if (halo2_radio::poll_halo_receive(received) && received.valid) {
+#ifdef USE_HALO2_LR1121
+    if (received.packet_options != state_.packet_options) {
+      const SavedLink saved{radio_address_, radio_channel_, 2, received.packet_options, 0};
+      link_preference_.save(&saved);
+    }
+#endif
     state_ = received;
     save_mode_();
     publish_lights_();
