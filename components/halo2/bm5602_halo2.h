@@ -1,5 +1,9 @@
 #pragma once
 
+#include "esphome/core/defines.h"
+
+#ifdef USE_HALO2_BM5602
+
 // BenQ ScreenBar HALO 2 radio bridge for BM5602 + M5Stack ATOM Lite.
 // Proven wiring: G22=CSN, G23=SCK, G19=SDIO/MOSI, G33=GIO2/MISO,
 // G25=GIO3/TBCLK. The seventh TBCLK wire is required for direct TX.
@@ -198,3 +202,5 @@ inline bool send_halo_state(uint8_t command,bool power,bool pir,bool front,bool 
 }
 
 } // namespace bm5602_halo2
+
+#endif  // USE_HALO2_BM5602

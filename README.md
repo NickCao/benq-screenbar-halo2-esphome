@@ -2,164 +2,139 @@
 
 [![Validate](https://github.com/Termina1/benq-screenbar-halo2-esphome/actions/workflows/validate.yml/badge.svg)](https://github.com/Termina1/benq-screenbar-halo2-esphome/actions/workflows/validate.yml)
 
-Control a **BenQ ScreenBar HALO 2** from Home Assistant using a **BM5602** radio module and an **M5Stack ATOM Lite**. The bridge supports power, front/back light, both brightness channels, color temperature, lamp mode, ultrasonic presence mode, and state updates from the original wireless controller.
+Control a **BenQ ScreenBar HALO 2** through Home Assistant's encrypted ESPHome native API. The bridge exposes **Front lamp** and **Back lamp** as lights with separate power and brightness controls and a shared color temperature. It can also enable the lamp's ultrasonic presence mode and listen to commands from the original controller.
 
-This is working firmware, not a packet-engine mock: transmission is synchronized to the BM5602 `TBCLK` output and uses the stock on-air framing and CRC.
+The primary hardware is the **Waveshare ESP32-S3-LR1121-HF**, using its onboard radio at 2.4 GHz in GFSK mode. The older **M5Stack ATOM Lite + BM5602** implementation is retained as an alternative.
 
-## What works
+## Hardware profiles
 
-- Power on/off
-- Front and rear light selection
-- Front brightness: 1–100
-- Rear brightness: 1–100
-- Color temperature: 2700–6500 K
-- Ultrasonic presence mode
-- Passive reception of original-controller state changes
-- ESPHome API, OTA, web UI and Home Assistant REST compatibility
+| Configuration | Hardware | Address setup |
+|---|---|---|
+| [`screenbar-halo2-lr1121.yaml`](screenbar-halo2-lr1121.yaml) | Waveshare ESP32-S3-LR1121-HF, 4 MB flash / 2 MB PSRAM | Automatic discovery from the original controller, or an explicit address |
+| [`screenbar-halo2.yaml`](screenbar-halo2.yaml) | M5Stack ATOM Lite with an external BM5602 | Compile-time address; requires seven-wire wiring including TBCLK |
 
-## Hardware
+Choose one profile for your bridge. Both use the device name `screenbar-halo2`; rename it if deploying more than one bridge. See [wiring and antenna connections](docs/WIRING.md) before powering the hardware.
 
-- M5Stack ATOM Lite (ESP32)
-- BM5602 2.4 GHz transceiver module
-- Seven wires, including the required `GIO3/TBCLK` synchronization wire
-- Fine soldering tools for BM5602 pin 8
+## Setup with Podman
 
-See **[Wiring and soldering](docs/WIRING.md)** before powering the boards.
+The commands below use Linux, Bash, and Podman. [`scripts/esphome`](scripts/esphome) runs the validated **ESPHome 2026.4.4** image and caches its tools under the ignored `.esphome/cache/` directory. No host ESPHome installation is required.
 
-## Files
+### 1. Configure credentials
+
+Clone or download the whole repository, preserving the `components/` and `packages/` directories alongside the board YAML files. From the repository root:
+
+```bash
+cp secrets.example.yaml secrets.yaml
+chmod 600 secrets.yaml
+openssl rand -base64 32
+```
+
+Edit `secrets.yaml`: supply your Wi-Fi SSID and password, separate recovery-AP and OTA passwords, and the generated API encryption key. Keep this file private; it is ignored by Git. Build artifacts contain these credentials too and should not be published.
+
+### 2. Compile and flash over USB
+
+For the Waveshare board, connect its USB adapter and use the appropriate serial device on your host:
+
+```bash
+ESPHOME_SERIAL_DEVICE=/dev/ttyACM0 ./scripts/esphome run screenbar-halo2-lr1121.yaml --device /dev/ttyACM0
+```
+
+The wrapper passes only the selected serial device into Podman. Your host user must have permission to access it. Rootless USB passthrough uses `keep-groups`, which requires Podman's `crun` runtime.
+
+For the ATOM Lite, use `screenbar-halo2.yaml` and its serial device instead, after completing the BM5602 wiring and setting its radio address.
+
+To compile without flashing:
+
+```bash
+./scripts/esphome compile screenbar-halo2-lr1121.yaml
+```
+
+### 3. Add the bridge to Home Assistant
+
+Accept the discovered ESPHome device, or add **Settings → Devices & services → Add integration → ESPHome** manually. Use `screenbar-halo2.local` (or its IP), port `6053`, and the API encryption key from `secrets.yaml`.
+
+The integration uses the native API directly. There is no REST package, MQTT configuration, or lamp-control web server to install. The fallback access point is for Wi-Fi recovery.
+
+### 4. Discover the lamp address (LR1121)
+
+With no explicit or previously saved radio address, discovery starts automatically. Keep the original controller near the board and repeatedly adjust brightness until **Radio status** reports discovery completed and **Radio address** shows an address and frequency. No specific brightness, temperature, or front/back selection is required.
+
+The bridge scans 2405, 2446, and 2475 MHz. It saves the link after three matching CRC-valid captures, so allow it time to scan while continuing to operate the controller. Discovery is passive: lamp commands from HA are blocked during the scan.
+
+The saved link is reused after reboot. Use **Discover lamp address** to learn another controller/lamp pair. An explicit YAML address takes precedence at the next boot; remove it to use the learned link. See [configuration](docs/CONFIGURATION.md) for manual addressing.
+
+## Home Assistant controls
+
+| Entity | Behavior |
+|---|---|
+| Front lamp | Front on/off, brightness, and shared color temperature |
+| Back lamp | Back on/off, brightness, and shared color temperature |
+| Ultrasonic sensor | Normal toggle for the lamp's automatic presence mode; it does not report occupancy |
+| Radio status | Initialization, discovery, controller reception, and command/error status |
+| Radio address | Learned/configured address and frequency; LR1121 only |
+| Discover lamp address | Starts a new passive scan; LR1121 only |
+| Resend current state | Reapplies the bridge's current settings and power state |
+| Restart | Restarts the bridge |
+
+There is no separate master Power entity. Turning off the last active section sends the lamp's global OFF command; turning either section on from fully off applies the settings and sends global ON.
+
+Brightness is independent for each section. Color temperature is shared by the lamp, so changing it on either entity updates both. The range is 2700–6500 K in 25 K steps. [BenQ user guide, English page 5](https://esupportdownload.benq.com/esupport/E-READING%20LAMP/UserManual/ScreenBar%20Halo%202/ScreenBar%20Halo%202_UM_DE_EN_ES_FR_IT_JA_NL_SV_ZH-TW_250627174322.pdf)
+
+HA's normal “all lights” controls operate both sections. For one dedicated ScreenBar control, optionally create an HA **Light group** containing Front lamp and Back lamp. Its default state is on if either member is on; group ON turns both sections on. The group is configured in HA, not created by this firmware. [HA light groups](https://www.home-assistant.io/integrations/group/)
+
+[`home-assistant/dashboard.yaml`](home-assistant/dashboard.yaml) provides an optional native-entity dashboard. Adapt its entity IDs if you renamed the device or entities. See [dashboard setup](docs/CONFIGURATION.md#optional-dashboard).
+
+## State synchronization and limits
+
+HA commands update the bridge's state optimistically. CRC-valid requests heard from the original controller update the same state and are published to HA without echoing another radio command. A later received full-state request can recover missed controller changes.
+
+This is **best-effort synchronization**, not polling the lamp. Lamp reply frames are ignored because their control byte is not a reliable state snapshot. Presence-triggered changes, power interruptions, or missed controller transmissions can leave HA out of sync. **Command sent** means local radio transmission completed, not that the lamp acknowledged or applied it.
+
+Operate the original controller to provide a fresh observed state, or use **Resend current state** to impose HA's current settings on the lamp. The latter sends commands; it does not query the lamp.
+
+## Updates and logs
+
+Use the same board profile you initially flashed:
+
+```bash
+./scripts/esphome run screenbar-halo2-lr1121.yaml --device screenbar-halo2.local
+./scripts/esphome logs screenbar-halo2-lr1121.yaml --device screenbar-halo2.local
+```
+
+`run` compiles the selected profile before uploading. Each profile has a separate build directory; both target the same default hostname.
+
+## Repository layout
 
 | Path | Purpose |
 |---|---|
-| `screenbar-halo2.yaml` | Production ESPHome configuration |
-| `bm5602_halo2.h` | Minimal BM5602 SPI, direct TX, CRC and passive RX driver |
-| `secrets.example.yaml` | Safe configuration template |
-| `home-assistant/package.yaml` | Optional authenticated REST integration with guarded controller-state synchronization |
-| `home-assistant/dashboard.yaml` | Compact stock-card dashboard |
-| `home-assistant/secrets.example.yaml` | Matching Home Assistant web credentials |
-| [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) | Differences from the packet-engine approach and why it failed on our tested lamp |
+| [`components/halo2/`](components/halo2/) | Self-contained ESPHome external component, shared protocol, and radio backends |
+| [`packages/halo2-common.yaml`](packages/halo2-common.yaml) | Networking, native API, entities, and common defaults |
+| `screenbar-halo2*.yaml` | Board-specific entry points |
+| [`scripts/esphome`](scripts/esphome) | Podman wrapper used locally and by CI |
+| [`secrets.example.yaml`](secrets.example.yaml) | Credential template |
+| [`home-assistant/dashboard.yaml`](home-assistant/dashboard.yaml) | Optional HA dashboard |
+| [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | Component options, manual addressing, and dashboard setup |
+| [`docs/WIRING.md`](docs/WIRING.md) | Waveshare antennas/pins and ATOM Lite wiring |
+| [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) | State handling, discovery, and radio frame formats |
+| [`tests/test_bm5602_crc.py`](tests/test_bm5602_crc.py) | Existing legacy BM5602 CRC vectors |
+| [`.github/workflows/validate.yml`](.github/workflows/validate.yml) | CRC checks and Podman compilation for both boards |
 
-## Install
+All C++ sources needed by `halo2` live in its component directory and are copied by ESPHome automatically. Board YAML files do not need `esphome.includes`. This follows ESPHome's [external-component layout](https://esphome.io/components/external_components/).
 
-### 1. Copy the ESPHome files
-
-Copy these files into the same ESPHome configuration directory:
-
-```text
-screenbar-halo2.yaml
-bm5602_halo2.h
-```
-
-Copy `secrets.example.yaml` to `secrets.yaml` and replace all placeholders. Generate the API key with `openssl rand -base64 32`. Use a unique web password; it protects the control/state endpoints used by the optional HA package. Never commit `secrets.yaml`.
-
-### 2. Flash over USB
+## Development
 
 ```bash
-esphome run screenbar-halo2.yaml
+python3 -m unittest discover -s tests -v
+./scripts/esphome compile screenbar-halo2-lr1121.yaml
+./scripts/esphome compile screenbar-halo2.yaml
 ```
 
-After boot, the node advertises as:
+The Python vectors cover the legacy BM5602 CRC representation; they do not exercise LR1121 discovery or hardware. CI uses dummy credentials and compiles both profiles. The wrapper defaults to four compiler processes; override `ESPHOME_DEFAULT_COMPILE_PROCESS_LIMIT` if needed. `ESPHOME_IMAGE` can select another image for compatibility checks.
 
-```text
-screenbar-halo2
-screenbar-halo2.local
-```
+## Project notes
 
-Authenticated web UI:
+Radio interoperability research was informed by public BM5602 examples and [kuzmin-no/BenQ_ScreenBar_HALO_2_HA_integration](https://github.com/kuzmin-no/BenQ_ScreenBar_HALO_2_HA_integration). The current bridge provides native ESPHome lights and an LR1121 implementation alongside the legacy BM5602 backend.
 
-```text
-http://screenbar-halo2/
-```
+This is an unofficial community project, not affiliated with or endorsed by BenQ. BenQ and ScreenBar are trademarks of their respective owner.
 
-Use `web_username` and `web_password` from ESPHome `secrets.yaml`. Web-based firmware upload is disabled; OTA updates use the separately protected native ESPHome OTA service.
-
-Future updates:
-
-```bash
-esphome run screenbar-halo2.yaml --device screenbar-halo2
-```
-
-### 3. Add to Home Assistant
-
-The simplest option is the native ESPHome integration:
-
-1. Open **Settings → Devices & services → Add integration → ESPHome**.
-2. Enter `screenbar-halo2` and port `6053`.
-3. Use the exposed switches, numbers, select and buttons directly.
-
-For the included compact dashboard and explicit polling synchronization, copy:
-
-```text
-home-assistant/package.yaml   -> config/packages/screenbar_halo2.yaml
-home-assistant/dashboard.yaml -> config/dashboards/screenbar_halo2.yaml
-```
-
-Merge the two values from `home-assistant/secrets.example.yaml` into Home Assistant's `config/secrets.yaml`. They must match `web_username` and `web_password` in ESPHome.
-
-Enable packages and register the YAML dashboard in `configuration.yaml`:
-
-```yaml
-homeassistant:
-  packages: !include_dir_named packages
-
-lovelace:
-  dashboards:
-    screenbar-yaml:
-      mode: yaml
-      title: ScreenBar
-      icon: mdi:monitor-shimmer
-      show_in_sidebar: true
-      filename: dashboards/screenbar_halo2.yaml
-```
-
-Validate before restarting:
-
-```bash
-ha core check
-ha core restart
-```
-
-The package accesses authenticated endpoints below `http://screenbar-halo2/...`; no fixed IP is embedded. A synchronization guard prevents received controller state from being echoed back as a new command, and HA startup waits for a valid bridge state instead of overwriting the lamp with restored helper values.
-
-## Radio details
-
-Tested configuration:
-
-```text
-Channel:              5 / 2405 MHz
-Register address:     9C EA BB 86
-Direct air address:   86 BB EA 9C
-Data path:            GIO2 / GPIO33
-Synchronization:      GIO3 TBCLK / GPIO25
-Bit order:            MSB first
-Data update edge:     TBCLK low
-CRC:                  CRC-CCITT, polynomial 0x1021
-CRC initial state:    0xEFDF before the four-byte on-air address
-```
-
-The tested lamp uses address `9C EA BB 86`. Other controller/lamp pairs may use a different address. If yours does, update `RADIO_ADDRESS` in `bm5602_halo2.h` only after capturing your own stock traffic; the direct on-air order and post-address CRC state are derived automatically.
-
-### RX state rule
-
-Only even-PID request frames are treated as authoritative controller state. Odd-PID lamp replies are deliberately ignored for synchronization: their control byte is response metadata and can differ from the requested state.
-
-## Reliability notes
-
-- RX polling is deliberately limited to 50 ms. Aggressive synchronous 10 ms FIFO draining can starve ESPHome API, HTTP and OTA while ICMP still appears alive.
-- Transmission always returns the BM5602 to passive RX mode.
-- Passive RX accepts only exact 13-byte stock requests with a valid CRC and in-range brightness/temperature values.
-- The native ESPHome API uses encryption. HTTP control uses unique basic-auth credentials, and web OTA is disabled.
-- Local transmission success is not described as a lamp acknowledgement. The implementation was validated using the transmitted frame, an independently received lamp response, and visible lamp reaction.
-
-## Prior art and research
-
-The interoperability work was informed by the public BM5602 examples and by [kuzmin-no/BenQ_ScreenBar_HALO_2_HA_integration](https://github.com/kuzmin-no/BenQ_ScreenBar_HALO_2_HA_integration). This repository provides an independently implemented ESP-IDF/ESPHome C++ direct-mode driver, the recovered framing/CRC behavior, and the Home Assistant integration used by this project.
-
-See **[Why this implementation uses synchronized direct mode](docs/IMPLEMENTATION_NOTES.md)** for the exact architectural differences, failed hypotheses, recovered frame format, and end-to-end validation criteria.
-
-## Disclaimer
-
-This is an unofficial community project and is not affiliated with or endorsed by BenQ. BenQ and ScreenBar are trademarks of their respective owner. Modifying hardware can damage it and may void its warranty.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+MIT license. See [LICENSE](LICENSE).

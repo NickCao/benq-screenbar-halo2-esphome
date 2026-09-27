@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+image="${ESPHOME_IMAGE:-ghcr.io/esphome/esphome:2026.4.4}"
+cache_dir="$project_dir/.esphome/cache"
+mkdir -p "$cache_dir"
+
+args=(
+  run --rm --network host
+  --volume "$project_dir:/config:z"
+  --volume "$cache_dir:/cache:z"
+  --env PLATFORMIO_CORE_DIR=/cache/platformio
+  --env "ESPHOME_DEFAULT_COMPILE_PROCESS_LIMIT=${ESPHOME_DEFAULT_COMPILE_PROCESS_LIMIT:-4}"
+)
+if [[ -t 0 ]]; then
+  args+=(-i)
+fi
+if [[ -t 1 ]]; then
+  args+=(-t)
+fi
+if [[ -n "${ESPHOME_SERIAL_DEVICE:-}" ]]; then
+  args+=(--device "$ESPHOME_SERIAL_DEVICE" --group-add keep-groups)
+fi
+
+exec podman "${args[@]}" "$image" "$@"

@@ -1,153 +1,124 @@
-# Why this implementation uses synchronized direct mode
+# Implementation notes
 
-This project began by reproducing the public six-wire BM5602 approach from [kuzmin-no/BenQ_ScreenBar_HALO_2_HA_integration](https://github.com/kuzmin-no/BenQ_ScreenBar_HALO_2_HA_integration). That implementation was useful prior art and established a working 4-wire SPI connection to the transceiver. On our tested ScreenBar HALO 2, however, reproducing the visible packet-engine configuration and payload did **not** result in a command accepted by the lamp.
+## Source organization
 
-This document explains the difference without implying that the earlier project is universally broken. BenQ revisions or paired radio parameters may differ. The statement here is narrower: **the packet-engine path did not control our tested lamp, while clock-synchronous direct mode did.**
+The bridge follows the [ESPHome external-component layout](https://esphome.io/components/external_components/). All runtime C++ code is inside [`components/halo2/`](../components/halo2/); ESPHome copies it into the generated build automatically.
 
-## Architecture comparison
+| File | Responsibility |
+|---|---|
+| `__init__.py` | Configuration validation, entity creation, and selection of the radio backend |
+| `halo2.h`, `halo2.cpp` | One shared lamp state, native light/switch adapters, command batching, preference storage, and discovery coordination |
+| `halo2_protocol.h` | Payloads, CRC, canonical/air-frame conversion, validation, and address extraction; independent of ESPHome and GPIO |
+| `lr1121_radio.h` | LR1121 command/packet handling over a templated transport |
+| `lr1121_halo2.h` | Waveshare GPIO/SPI transport and LR1121 adapter |
+| `bm5602_halo2.h` | Legacy ATOM Lite/BM5602 SPI, clocked direct TX, and passive RX |
 
-| Area | Previous packet-engine approach | This repository |
+Python code generation defines `USE_HALO2_LR1121` or `USE_HALO2_BM5602`. Hardware-specific headers are guarded by these defines because ESPHome includes component headers in its generated umbrella header. This prevents the unselected board's GPIO code from entering the build.
+
+The radio backends retain their existing header-based implementation. The LR1121 command engine is templated; the timing-sensitive legacy BM5602 routines remain together. The component owns the HA-facing state, and protocol encoding is shared between backends.
+
+## HA state and radio commands
+
+`Halo2` keeps one `HaloRxState`: global power, front/back selection, two brightness values, shared temperature, presence-mode enable, and packet options. The front and back light entities are views of this state.
+
+| Front light | Back light | Radio state |
 |---|---|---|
-| MCU-to-BM interface | 4-wire SPI | 4-wire SPI plus direct-data and clock synchronization |
-| Physical connections | Six wires | Seven wires |
-| GIO2 | SPI MISO/SDO | SPI MISO normally; direct TX data during transmission |
-| GIO3 | Not connected | `TBCLK` output connected to ATOM GPIO25 |
-| TX FIFO | BM5602 packet FIFO, `W_TX_PAYLOAD` | Software-built complete on-air bitstream |
-| Packet framing | Generated internally by BM5602 | Explicit preamble, air address, PCF, payload and CRC |
-| CRC | BM5602 packet engine | Software CRC-CCITT (`0x1021`) |
-| RX | Packet-engine FIFO | Passive fixed-width FIFO with software validation |
-| State source | Primarily optimistic control state | Original-controller request frames, CRC checked |
+| On | On | Power on, both selected |
+| On | Off | Power on, front selected |
+| Off | On | Power on, back selected |
+| Off | Off | Power off, a valid previous selection retained in the frame |
 
-## What worked in the six-wire port
+There is no master Power entity. Turning one section off while the other remains on changes selection. Turning off the last section requires global power OFF. Each section's last useful brightness is retained.
 
-The six-wire port was not an SPI or wiring failure. We verified:
+Color temperature is one logical setting and is mirrored between the two light entities. The payload contains two temperature fields; the bridge writes the same value to both, matching the lamp's documented shared-temperature behavior.
 
-- BM5602 identification returned `56 02 01`.
-- `SDIO` worked as MOSI.
-- `GIO2` worked as MISO after writing `IO1 = 0x48`.
-- Register writes and reads were stable.
-- The TX FIFO accepted the expected 10-byte application payload.
-- RF energy and transmitted frames were observable with a separate receiver.
+Commands arriving before the next 50 ms update are combined into the shared state:
 
-These checks proved that the MCU could configure and transmit through the BM5602. They did **not** prove that the lamp accepted the resulting on-air packet.
+- `0x03` applies mode, brightness, temperature, and presence settings; it does not change global power.
+- `0x02` explicitly changes global power. It takes precedence over settings-only commands within a pending batch.
+- When sending ON, the bridge first sends `0x03` with the final settings, then `0x02`. OFF needs `0x02` alone.
 
-## Why the lamp still rejected it
+This ordering makes consecutive front/back commands from HA's group or “all lights” controls work in either arrival order. The diagnostic **Resend current state** button uses the same power-aware sequence.
 
-The packet seen by application code is not the complete radio frame. The BM5602 packet engine also creates or transforms fields that are not visible in the 10-byte payload:
+Received controller state is published under a guard that prevents the resulting light callbacks from queuing another transmission. Shared-temperature synchronization uses the same guard. The light adapter also tracks whether a deferred write originated locally, so an incoming radio update is not echoed later.
 
-- preamble;
-- address serialization;
-- the 9-bit Packet Control Field (PCF);
-- packet ID and ACK-request behavior;
-- CRC state and covered bits;
-- possible trailing or alignment bits.
+At boot, light preferences and the saved selection initialize the bridge without transmitting. The saved radio link includes address, channel, and packet options. HA commands are optimistic; received controller requests replace this state when heard.
 
-Our independent sniffer could see the expected visible payload from packet-engine transmission, but the lamp produced no valid response and showed no physical reaction. We tested and excluded the obvious alternatives:
+## LR1121 address discovery
 
-- normal and reversed register address order;
-- different dynamic-payload settings;
-- packet-ID sweeps;
-- stale reset state;
-- basic SPI, RF channel and module failure.
+The Waveshare board receives raw 2.4 GHz GFSK at 125 kbps, with 160 kHz frequency deviation, Gaussian BT=0.5 shaping, and 467 kHz receive bandwidth. Transmission is configured at 0 dBm. The dedicated 2.4G antenna path is separate from the board's sub-GHz antenna switch; see [antenna routing](WIRING.md#antennas).
 
-The remaining difference was hidden on-air framing generated by the packet engine.
+Discovery starts if enabled and neither a configured nor saved link is available. It can also be started by the discovery button.
 
-## The decisive change: GIO3 / TBCLK
+1. Scan channels 5, 46, and 75, alternating `0xAA` / `0x55` preamble-byte sync patterns, with a three-second dwell per combination.
+2. Disable the normal preamble gate and capture 24 bytes after the short sync. Prepend that sync byte to the capture.
+3. Search all bit alignments for a four-byte address followed by a valid complete request.
+4. Check framing, CRC, brightness/temperature ranges, and request fields. Count matches by address and channel.
+5. After three matching valid captures, configure full 32-bit address sync and normal fixed-width RX, publish the captured state, and save the link to ESPHome preferences.
 
-The BM5602 can expose its direct-mode bit clock on `GIO3`. We added the seventh wire:
+Only valid controller requests count; arbitrary RF bytes do not identify a link. No particular brightness or temperature is required. Transmission is blocked during discovery.
+
+Normal reception holds one packet until the next poll. This prevents an immediate lamp reply from overwriting a captured controller request. RX is rearmed after polling and after transmission attempts.
+
+## Packet representations
+
+Both backends use a canonical 13-byte representation internally:
 
 ```text
-BM5602 pin 8 / GIO3 / TBCLK  ->  M5Stack ATOM Lite GPIO25
+PCF (1 byte) | application payload (10 bytes) | CRC16 (2 bytes)
 ```
 
-During transmission:
+The payload is:
+
+| Payload offset | Meaning |
+|---|---|
+| 0 | Command |
+| 1 | Control: power in bit 0, mode in bits 3–4, presence enable in bit 5 |
+| 2 | Front brightness, 1–100 |
+| 3–4 | Shared temperature in kelvin, big-endian |
+| 5 | Back brightness, 1–100 |
+| 6–7 | Same temperature, repeated |
+| 8 | Packet option observed as `0x00` or `0x01`; preserved from received traffic |
+| 9 | Fixed suffix `0x02` |
+
+Modes are front-only `0`, back-only `1`, and both `2`. Request PCFs are formed as `0x50 | ((pid & 3) << 1)`.
+
+For synchronization, the decoder rejects frames with PCF bit 0 set: the observed lamp replies carry response metadata rather than reliable requested state. This is a distinction in the low PCF bit, not the parity of the two-bit packet ID. Accepted frames must also have the expected length, payload-length field, command range, suffix, mode, CRC, and in-range brightness/temperature.
+
+### LR1121 on-air format
 
 ```text
-GIO2 selector 3  = DIRECT_TXD
-GIO3 selector 8  = TBCLK_OUTPUT
-GPIO33            = direct data
-GPIO25            = TBCLK input
-update edge       = LOW
-bit order         = MSB first
+preamble | address (4 bytes, reversed from register order)
+         | leading zero PCF bit | canonical PCF byte
+         | payload (10 bytes) | CRC16
 ```
 
-The ESP32 changes each data bit against the BM5602's own clock rather than approximating bit timing with delays. This removes phase drift and makes the transmitted bitstream deterministic.
+After address synchronization, the radio captures 105 meaningful bits as a 14-byte buffer, with seven padding bits. `make_air_frame()` and `decode_air_frame()` insert/remove the leading PCF bit and pack/unpack this representation.
 
-## Recovered stock frame format
+CRC uses polynomial `0x1021`, initial state `0xFFFF`, and covers the on-air address, the full nine-bit PCF, and payload. The LR1121's hardware CRC and whitening are disabled; software constructs and validates the complete frame.
 
-A captured original-controller request was:
+See the [Semtech LR1121 user manual](https://files.waveshare.com/wiki/Core1121/UserManual_LR1121_v1_2.pdf) for the transceiver commands and RF configuration. The ScreenBar framing above is implemented by this project, not provided by a LoRa modem.
 
-```text
-54 04 10 0C 0F 55 5B 0F 55 01 02 20 B9
-```
+### Legacy BM5602 format
 
-The direct transmitter sends:
+The BM5602 backend retains its previously working byte-aligned FIFO/direct-input representation. Its CRC model starts at `0xEFDF` and covers the reversed address, canonical PCF byte, and payload. Do not apply these byte-aligned vectors to LR1121's raw nine-bit air format.
 
-1. alternating preamble;
-2. air address `86 BB EA 9C`;
-3. canonical PCF byte;
-4. ten application bytes;
-5. CRC16.
+During direct transmission, GIO2 becomes data input and GIO3 exposes TBCLK. The ESP32 changes each bit on the low TBCLK edge, sends MSB first, and then returns the BM5602 to passive receive mode. A missing clock produces `BM5602 NO CLOCK`.
 
-### No extra manual ninth PCF bit
+The existing [`test_bm5602_crc.py`](../tests/test_bm5602_crc.py) vectors use register address `9C EA BB 86`:
 
-An early direct-mode attempt inserted a separate ninth PCF bit after the canonical PCF byte. That shifted the entire payload by one bit. In this direct input path, the canonical PCF byte must be followed immediately by the first payload byte.
+| Vector | PCF | CRC |
+|---|---|---|
+| Stock request | `0x54` | `0x20B9` |
+| Power on | `0x50` | `0xE962` |
+| Power off | `0x50` | `0x0241` |
 
-### CRC
+These are legacy CRC reference checks, not an end-to-end test of the component or LR1121 driver.
 
-The recovered CRC model is:
+## Reliability and verification
 
-```text
-algorithm:       CRC-CCITT
-polynomial:      0x1021
-initial state:   0xEFDF before the four on-air address bytes
-covered bytes:   reversed/on-air address + PCF + 10-byte payload
-```
+The bridge does not poll the lamp for status and does not use lamp replies as acknowledgements. **Command sent** means the backend completed transmission. On LR1121 this includes observing TX_DONE, not confirming a visible lamp change.
 
-For the tested address, the state after the four address bytes is `0x5042`.
+The original controller sends settings snapshots, so a later valid request can recover missed updates. Reception is still best effort: collisions, range, simultaneous bridge transmission, autonomous presence changes, and power interruptions can leave HA state stale.
 
-Known vectors included in `tests/test_protocol.py`:
-
-```text
-stock request:  PCF 54 -> CRC 20B9
-power on:       PCF 50 -> CRC E962
-power off:      PCF 50 -> CRC 0241
-```
-
-## End-to-end validation
-
-A successful local TX function call is not described as a lamp acknowledgement. The working path was accepted only after all three observations agreed:
-
-1. the bridge emitted the intended bit-exact request;
-2. an independent receiver captured the lamp's immediate RF response;
-3. the lamp visibly changed state.
-
-Validated examples:
-
-```text
-TX ON:     50 02 11 0C 0F 55 5B 0F 55 01 02 E9 62
-Lamp reply:51 05 10 0C 0F 55 5B 0F 55 01 02 C6 F2
-
-TX OFF:    50 02 10 0C 0F 55 5B 0F 55 01 02 02 41
-Lamp reply:51 04 10 0C 0F 55 5B 0F 55 01 02 A9 B7
-```
-
-## Why lamp replies are not used as state
-
-The reply control byte can differ from the requested control byte. For example, the accepted ON request carried control `0x11`, while its lamp reply carried `0x10`. Treating the reply as authoritative state would incorrectly turn the Home Assistant entity back off.
-
-Observed stock exchanges distinguish the roles through PCF packet-ID parity:
-
-- **even PID:** original-controller request — authoritative desired state;
-- **odd PID:** lamp reply — response metadata, not authoritative state.
-
-Passive RX therefore accepts only even-PID requests and additionally requires:
-
-- exactly 13 bytes;
-- valid CRC;
-- valid lamp mode;
-- brightness and temperature within supported ranges.
-
-## Summary
-
-The earlier approach correctly demonstrated BM5602 SPI and packet-engine transmission. It failed on our unit because matching the visible payload was insufficient; the lamp required the exact hidden on-air framing. The extra `TBCLK` wire lets this implementation bypass that ambiguity and reproduce the accepted stock frame bit for bit.
+The Waveshare implementation has been exercised on hardware for discovery, saved-link restoration, native API control, front/back operation, and grouped on/off commands. CI separately compiles both board configurations using the pinned Podman image and runs the existing BM5602 CRC vectors. A successful build or TX_DONE does not establish lamp acknowledgement or RF isolation measurements.

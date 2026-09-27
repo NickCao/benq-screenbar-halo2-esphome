@@ -1,5 +1,9 @@
 #pragma once
 
+#include "esphome/core/defines.h"
+
+#ifdef USE_HALO2_LR1121
+
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_rom_sys.h"
@@ -93,3 +97,5 @@ inline bool send_halo_state(uint8_t command, bool power, bool pir, bool front, b
   return radio.send(frame);
 }
 }  // namespace lr1121_halo2
+
+#endif  // USE_HALO2_LR1121

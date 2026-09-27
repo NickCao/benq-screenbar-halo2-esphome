@@ -1,3 +1,5 @@
+"""Captured CRC vectors for the legacy BM5602 byte-aligned frame format."""
+
 import unittest
 
 RADIO_ADDRESS = bytes.fromhex("9C EA BB 86")

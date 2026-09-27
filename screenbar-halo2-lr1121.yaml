@@ -6,7 +6,7 @@ halo2:
     name: "Radio address"
   discover_button:
     name: "Discover lamp address"
-  # RF defaults for the BM5602's 125 kbps mode. Confirm on real hardware.
+  # Validated with the original controller at 125 kbps.
   frequency_deviation_hz: 160000
   # LR1121 Gaussian BT=0.5 (0x00 disables pulse shaping).
   pulse_shape: 0x09
@@ -16,10 +16,6 @@ packages:
 
 esphome:
   build_path: build/screenbar-halo2-lr1121
-  includes:
-    - halo2_protocol.h
-    - lr1121_radio.h
-    - lr1121_halo2.h
 
 esp32:
   variant: esp32s3

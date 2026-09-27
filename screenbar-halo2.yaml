@@ -1,3 +1,4 @@
+# M5Stack ATOM Lite with an external BM5602 and TBCLK wiring.
 halo2:
   radio: BM5602
 
@@ -5,9 +6,7 @@ packages:
   halo2: !include packages/halo2-common.yaml
 
 esphome:
-  includes:
-    - halo2_protocol.h
-    - bm5602_halo2.h
+  build_path: build/screenbar-halo2-bm5602
 
 esp32:
   board: m5stack-atom
