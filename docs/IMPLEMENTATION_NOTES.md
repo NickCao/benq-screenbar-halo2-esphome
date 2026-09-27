@@ -32,7 +32,7 @@ There is no master Power entity. Turning one section off while the other remains
 
 Color temperature is one logical setting and is mirrored between the two light entities. The payload contains two temperature fields; the bridge writes the same value to both, matching the lamp's documented shared-temperature behavior.
 
-Commands arriving before the next 50 ms update are combined into the shared state:
+Commands arriving before the next 50 ms update are combined into the shared state. The first command is eligible immediately. Following a completed command batch, `command_debounce` imposes a one-second default cooldown; further requests are combined and the latest state is sent when that fixed interval expires:
 
 - `0x03` applies mode, brightness, temperature, and presence settings; it does not change global power.
 - `0x02` explicitly changes global power. It takes precedence over settings-only commands within a pending batch.
@@ -41,9 +41,17 @@ Commands arriving before the next 50 ms update are combined into the shared stat
 
 This ordering makes consecutive front/back commands from HA's group or “all lights” controls work in either arrival order. The diagnostic **Resend current state** button uses the same power-aware sequence.
 
+LR1121 queues the complete one- or two-packet batch before starting it. **Command sent** is published and the cooldown starts only after every packet reports TX_DONE. New HA requests can update the pending state while that batch is in flight. Received frames cannot overwrite pending commands.
+
 Received controller state is published under a guard that prevents the resulting light callbacks from queuing another transmission. Shared-temperature synchronization uses the same guard. The light adapter also tracks whether a deferred write originated locally, so an incoming radio update is not echoed later.
 
 At boot, light preferences and the saved selection initialize the bridge without sending settings or power commands. The saved radio link includes address, channel, and packet options. HA commands are optimistic; received controller requests and validated LR1121 status replies replace this state. Unchanged status replies do not republish the light entities.
+
+## LR1121 scheduling and recovery
+
+The driver advances up to four SPI transactions per ESPHome loop call. Reset pulse timing, startup, BUSY waits, calibration, TX completion, RX reads and rearming all use timed states. Individual SPI transfers remain synchronous and bounded to 32 bytes at 1 MHz; the only explicit delay is one microsecond for NSS-to-BUSY propagation. The component keeps its loop enabled to service the radio independently of the 50 ms application update.
+
+Faults stop the current operation and schedule radio reinitialization with an exponential retry delay of 1–30 seconds. The bridge keeps Wi-Fi/API connectivity and its saved address, channel and packet options. Successful initialization resets the retry delay, restores passive reception or restarts an interrupted discovery, and schedules a fresh lamp-state query. In-flight and pending commands are dropped so recovery cannot replay stale actions. Failed initialization also retries instead of permanently marking the component failed.
 
 ## LR1121 status polling
 
@@ -55,7 +63,7 @@ The lamp preloads its ACK payload before processing the triggering request. A si
 2. After that acknowledgement, waits 500 ms for the lamp to update its queued payload, then sends a second query.
 3. Accepts only a matching reply carrying command `0x04` as current lamp state. If an older command reply is still queued, retries the read after another 500 ms, up to three read attempts in total.
 
-Each reply can time out after 200 ms; waiting does not block the component loop. A missed refresh acknowledgement prevents subsequent queries from being accepted as fresh. A new local command or received controller request cancels the in-progress cycle. After three failed cycles, the component reports a warning while retaining the last known state; a successful cycle clears it.
+Each reply can time out after 200 ms, measured from TX_DONE rather than from queueing the request; waiting does not block the component loop. A missed refresh acknowledgement prevents subsequent queries from being accepted as fresh. A new local command or received controller request cancels the in-progress cycle. After three failed cycles, the component reports a warning while retaining the last known state; a successful cycle clears it.
 
 The radio switches directly from TX to a 20 ms RX window using `AutoTxRx` (`0x020C`). Returning from TX leaves the captured ACK intact until the next receive-buffer check. Normal RX uses the full 32-bit address sync without a separate preamble gate, so short ACK preambles can be received. After each packet or timeout, the driver disables automatic switching before returning to passive RX; receiving controller traffic must not trigger transmission.
 

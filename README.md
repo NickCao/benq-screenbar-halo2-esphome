@@ -79,6 +79,8 @@ The saved link is reused after reboot. Use **Discover lamp address** to learn an
 
 There is no separate master Power entity. Turning off the last active section sends the lamp's global OFF command; turning either section on from fully off applies the settings and sends global ON.
 
+The first command is sent without a debounce delay. For one second after a command batch finishes, further changes are combined into a single final update. HA reflects requests immediately. Set `halo2.command_debounce` to adjust this interval.
+
 Brightness is independent for each section. Color temperature is shared by the lamp, so changing it on either entity updates both. The range is 2700–6500 K in 25 K steps. [BenQ user guide, English page 5](https://esupportdownload.benq.com/esupport/E-READING%20LAMP/UserManual/ScreenBar%20Halo%202/ScreenBar%20Halo%202_UM_DE_EN_ES_FR_IT_JA_NL_SV_ZH-TW_250627174322.pdf)
 
 HA's normal “all lights” controls operate both sections. For one dedicated ScreenBar control, optionally create an HA **Light group** containing Front lamp and Back lamp. Its default state is on if either member is on; group ON turns both sections on. The group is configured in HA, not created by this firmware. [HA light groups](https://www.home-assistant.io/integrations/group/)
@@ -92,6 +94,8 @@ HA commands update the bridge's state optimistically. CRC-valid requests heard f
 The **LR1121 profile queries the lamp every five seconds**, so presence-triggered on/off, Auto brightness adjustments, and missed controller changes are reflected in HA after the next successful poll. Each cycle refreshes the lamp's queued status, waits half a second, and reads it back. The first reply can contain old state and is discarded, preventing it from undoing a recent HA command. Local commands trigger an earlier refresh.
 
 After three failed polling cycles, **Radio status** reports that lamp status is unavailable; the lights retain their last known state. A successful reply restores synchronization. **Command sent** means local radio transmission completed; **Lamp status received** indicates an actual status reply. See [polling configuration](docs/CONFIGURATION.md#component-options).
+
+LR1121 hardware errors trigger automatic radio reinitialization, with retries from one to thirty seconds apart. Wi-Fi and the native API remain running. Recovery restores the radio link and reads the lamp's state without replaying interrupted commands.
 
 The legacy **BM5602 profile only listens to controller requests**. It does not poll the lamp, so autonomous changes or missed traffic can leave its HA state stale. **Resend current state** reapplies HA's settings to the lamp on either profile; it is not a status query.
 

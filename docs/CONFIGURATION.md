@@ -43,6 +43,7 @@ The schema is defined in [`components/halo2/__init__.py`](../components/halo2/__
 | `auto_button` | Optional button activating the lamp's automatic brightness adjustment; included in the common package |
 | `radio_status` | Required diagnostic text sensor |
 | `update_interval` | Receive-buffer checks and pending-command processing interval; default `50ms` |
+| `command_debounce` | Minimum gap after a command batch; changes during this interval are combined into the latest state. Default `1s`; `0s` disables it. The first request has no added delay. |
 | `status_poll_interval` | LR1121 only; interval between lamp status refresh cycles, default `5s`, minimum `1s` |
 | `auto_discover` | LR1121 only; defaults to true, starts discovery when neither an explicit nor saved link exists |
 | `radio_address` | LR1121 only; four bytes in register order, overriding the saved link at boot |
@@ -56,7 +57,16 @@ The Waveshare profile includes both discovery entities. Keep its validated RF se
 
 Leave `update_interval` at 50 ms for normal use. It controls local processing, not how often status queries are transmitted. `status_poll_interval` controls those queries independently; each cycle normally uses two requests about half a second apart to discard the lamp's old queued reply before reading fresh state. Up to two extra reads drain any additional queued command replies. Replies are checked without blocking ESPHome while waiting. Faster processing or status polling increases radio work.
 
-HA commands schedule a status refresh after 500 ms. Polling pauses during light transitions and discovery. Three consecutive failed cycles produce a **Radio status** warning and retain the last known light states; successful polling clears it. The BM5602 profile has no active status polling.
+Completed HA command batches schedule a status refresh after 500 ms. Polling pauses during pending commands, light transitions and discovery. Three consecutive failed cycles produce a **Radio status** warning and retain the last known light states; successful polling clears it. The BM5602 profile has no active status polling.
+
+`command_debounce` applies to both profiles. The first request is handled on the next `update_interval` tick when the radio is available. Requests arriving during the cooldown are combined and sent when it expires; they do not restart the timer. The required settings-plus-power sequence remains one batch. For example:
+
+```yaml
+halo2:
+  command_debounce: 1s
+```
+
+LR1121 reset, BUSY, transmit completion and receive processing run asynchronously. A low-level radio error triggers retries after 1, 2, 4, 8, 16, then 30 seconds, capped at 30 seconds until initialization succeeds. Only the radio resets; the learned address, Wi-Fi and native API are retained. Incomplete commands are discarded and actual lamp status is queried after recovery. These changes do not replace the legacy BM5602 driver's synchronous timing.
 
 The component currently supports one radio/bridge instance per device and uses the fixed board pins described in [wiring](WIRING.md).
 

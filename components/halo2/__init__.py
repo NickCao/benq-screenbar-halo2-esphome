@@ -75,6 +75,7 @@ CONFIG_SCHEMA = cv.All(
                 cv.positive_time_period_milliseconds,
                 cv.Range(min=cv.TimePeriod(milliseconds=1000)),
             ),
+            cv.Optional("command_debounce", default="1s"): cv.positive_time_period_milliseconds,
             cv.Optional("frequency_deviation_hz", default=160000): cv.int_range(
                 min=1, max=170999
             ),
@@ -103,6 +104,7 @@ async def to_code(config):
     cg.add_define(f"USE_HALO2_{config['radio']}")
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
+    cg.add(var.set_command_debounce(config["command_debounce"]))
     cg.add(var.set_frequency_deviation(config["frequency_deviation_hz"]))
     cg.add(var.set_pulse_shape(config["pulse_shape"]))
     cg.add(var.set_auto_discover(config.get("auto_discover", config["radio"] == "LR1121")))

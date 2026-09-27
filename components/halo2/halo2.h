@@ -28,6 +28,7 @@ class Halo2 : public PollingComponent {
   void set_radio_address(const halo2_protocol::Address &value) { radio_address_ = value; address_configured_ = true; }
   void set_radio_channel(uint8_t value) { radio_channel_ = value; }
   void set_status_poll_interval(uint32_t value) { status_poll_interval_ = value; }
+  void set_command_debounce(uint32_t value) { command_debounce_ = value; }
   void start_discovery();
   void start_auto_brightness();
 
@@ -46,6 +47,10 @@ class Halo2 : public PollingComponent {
   void apply_received_(const halo2_protocol::HaloRxState &received);
   void publish_address_();
   bool scan_channel_();
+#ifdef USE_HALO2_LR1121
+  void start_radio_();
+  void recover_radio_();
+#endif
 
   struct SavedLink {
     halo2_protocol::Address address{};
@@ -75,10 +80,21 @@ class Halo2 : public PollingComponent {
   bool address_configured_{false};
   bool auto_discover_{false};
   bool discovering_{false};
+#ifdef USE_HALO2_LR1121
+  enum class Transmission { NONE, COMMAND, STATUS };
+  Transmission transmission_{Transmission::NONE};
+  uint32_t recovery_at_{0};
+  uint32_t recovery_delay_{1000};
+  bool recovering_{false};
+  bool scan_pending_{false};
+#endif
   halo2_protocol::HaloRxState state_;
   uint32_t frequency_deviation_{160000};
   uint8_t pulse_shape_{0x09};
   uint8_t pending_command_{0};
+  uint32_t command_debounce_{1000};
+  uint32_t command_sent_at_{0};
+  bool command_sent_{false};
   bool pending_auto_brightness_{false};
   uint32_t status_poll_interval_{0};
   uint32_t next_status_poll_{0};

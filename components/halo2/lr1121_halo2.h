@@ -8,8 +8,6 @@
 #include "driver/spi_master.h"
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "lr1121_radio.h"
 
 namespace lr1121_halo2 {
@@ -48,20 +46,11 @@ class EspIdfTransport {
     }
     return true;
   }
-  void reset() {
-    gpio_set_level(RESET, 0);
-    delay_ms(1);
-    gpio_set_level(RESET, 1);
-    delay_ms(10);
-  }
+  bool set_reset(bool high) { return gpio_set_level(RESET, high) == ESP_OK; }
   bool busy() const { return gpio_get_level(BUSY); }
   bool irq() const { return gpio_get_level(IRQ); }
   int64_t now_us() const { return esp_timer_get_time(); }
   void delay_us(uint32_t us) { esp_rom_delay_us(us); }
-  void delay_ms(uint32_t ms) {
-    const TickType_t ticks = pdMS_TO_TICKS(ms);
-    vTaskDelay(ticks ? ticks : 1);
-  }
   bool transfer(const uint8_t *tx, uint8_t *rx, size_t size) {
     spi_transaction_t transaction{};
     transaction.length = size * 8;
