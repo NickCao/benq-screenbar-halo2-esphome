@@ -52,7 +52,7 @@ void Halo2::setup() {
   state_.color_temperature = temperature_kelvin(front.get_color_temperature());
   save_mode_();
   publish_lights_();
-  publish_switches_();
+  ultrasonic_switch_->publish_state(state_.pir);
 
 #ifdef USE_HALO2_LR1121
   link_preference_ = global_preferences->make_preference<SavedLink>(0x48414C33);
@@ -182,7 +182,7 @@ void Halo2::loop() {
       state_ = received;
       save_mode_();
       publish_lights_();
-      publish_switches_();
+      ultrasonic_switch_->publish_state(state_.pir);
       publish_address_();
       publish_status_(persisted ? "Address discovered and saved" : "Address discovered; save failed");
       if (!persisted) status_set_warning();
@@ -239,8 +239,8 @@ void Halo2::control_light(light::LightState *light, bool front) {
     state_.front = front_on;
     state_.back = back_on;
   }
-  // Remember a useful brightness after fading to off, and retain the selected
-  // mode when both lights are off so the master power switch can restore it.
+  // Remember a useful brightness after fading to off, and retain a valid
+  // selected mode in the radio state while both lights are off.
   const uint8_t brightness = brightness_percent(on ? values.get_brightness() : light->remote_values.get_brightness());
   uint8_t &stored_brightness = front ? state_.front_brightness : state_.back_brightness;
   const uint16_t temperature = temperature_kelvin(values.get_color_temperature());
@@ -252,7 +252,6 @@ void Halo2::control_light(light::LightState *light, bool front) {
   if (settings_changed || was_powered != state_.power) {
     queue_command_(was_powered != state_.power ? 0x02 : 0x03);
     save_mode_();
-    publish_switches_();
   }
   if (temperature_changed || (!light->is_transformer_active() &&
       values.get_color_temperature() != 1000000.0f / state_.color_temperature)) {
@@ -281,16 +280,11 @@ void Halo2::synchronize_temperature_(light::LightState *source) {
   control_light(peer, peer == front_light_);
 }
 
-void Halo2::control_switch(bool power, bool value) {
+void Halo2::control_ultrasonic(bool value) {
   if (!accepts_commands()) return;
-  if (power) {
-    state_.power = value;
-    publish_lights_();
-  } else {
-    state_.pir = value;
-  }
-  publish_switches_();
-  queue_command_(power ? 0x02 : 0x03);
+  state_.pir = value;
+  ultrasonic_switch_->publish_state(state_.pir);
+  queue_command_(0x03);
 }
 
 void Halo2::publish_light_(light::LightState *light, bool front) {
@@ -308,11 +302,6 @@ void Halo2::publish_lights_() {
   publish_light_(front_light_, true);
   publish_light_(back_light_, false);
   publishing_ = false;
-}
-
-void Halo2::publish_switches_() {
-  power_switch_->publish_state(state_.power);
-  ultrasonic_switch_->publish_state(state_.pir);
 }
 
 void Halo2::publish_status_(const char *status) {
@@ -365,7 +354,7 @@ void Halo2::update() {
     state_ = received;
     save_mode_();
     publish_lights_();
-    publish_switches_();
+    ultrasonic_switch_->publish_state(state_.pir);
     status_clear_warning();
     publish_status_("Controller update received");
   } else if (const char *error = halo2_radio::last_error()) {

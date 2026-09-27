@@ -21,7 +21,6 @@ class Halo2 : public PollingComponent {
   void set_frequency_deviation(uint32_t value) { frequency_deviation_ = value; }
   void set_pulse_shape(uint8_t value) { pulse_shape_ = value; }
   void set_light(light::LightState *value, bool front) { (front ? front_light_ : back_light_) = value; }
-  void set_power_switch(switch_::Switch *value) { power_switch_ = value; }
   void set_ultrasonic_switch(switch_::Switch *value) { ultrasonic_switch_ = value; }
   void set_radio_status(text_sensor::TextSensor *value) { radio_status_ = value; }
   void set_radio_address_sensor(text_sensor::TextSensor *value) { radio_address_sensor_ = value; }
@@ -32,7 +31,7 @@ class Halo2 : public PollingComponent {
 
   bool accepts_commands() const { return ready_ && !publishing_ && !discovering_; }
   void control_light(light::LightState *light, bool front);
-  void control_switch(bool power, bool value);
+  void control_ultrasonic(bool value);
   void resend() { if (accepts_commands()) queue_command_(0x02); }
 
  protected:
@@ -40,7 +39,6 @@ class Halo2 : public PollingComponent {
   void publish_lights_();
   void publish_light_(light::LightState *light, bool front);
   void synchronize_temperature_(light::LightState *source);
-  void publish_switches_();
   void publish_status_(const char *status);
   void save_mode_();
   void publish_address_();
@@ -61,7 +59,6 @@ class Halo2 : public PollingComponent {
 
   light::LightState *front_light_{nullptr};
   light::LightState *back_light_{nullptr};
-  switch_::Switch *power_switch_{nullptr};
   switch_::Switch *ultrasonic_switch_{nullptr};
   text_sensor::TextSensor *radio_status_{nullptr};
   text_sensor::TextSensor *radio_address_sensor_{nullptr};
@@ -108,15 +105,13 @@ class Halo2Light : public light::LightOutput {
   bool forward_update_{false};
 };
 
-class Halo2Switch : public switch_::Switch {
+class Halo2UltrasonicSwitch : public switch_::Switch {
  public:
-  Halo2Switch(Halo2 *parent, bool power) : parent_(parent), power_(power) {}
-  bool assumed_state() override { return true; }
+  explicit Halo2UltrasonicSwitch(Halo2 *parent) : parent_(parent) {}
 
  protected:
-  void write_state(bool value) override { parent_->control_switch(power_, value); }
+  void write_state(bool value) override { parent_->control_ultrasonic(value); }
   Halo2 *parent_;
-  bool power_;
 };
 
 class Halo2DiscoverButton : public button::Button {

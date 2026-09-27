@@ -15,7 +15,7 @@ DEPENDENCIES = ["esp32"]
 halo2_ns = cg.esphome_ns.namespace("halo2")
 Halo2 = halo2_ns.class_("Halo2", cg.PollingComponent)
 Halo2Light = halo2_ns.class_("Halo2Light", light.LightOutput)
-Halo2Switch = halo2_ns.class_("Halo2Switch", switch.Switch)
+Halo2UltrasonicSwitch = halo2_ns.class_("Halo2UltrasonicSwitch", switch.Switch)
 Halo2DiscoverButton = halo2_ns.class_("Halo2DiscoverButton", button.Button)
 
 LIGHT_SCHEMA = light.light_schema(
@@ -74,14 +74,8 @@ CONFIG_SCHEMA = cv.All(
             ),
             cv.Required("front_light"): LIGHT_SCHEMA,
             cv.Required("back_light"): LIGHT_SCHEMA,
-            cv.Required("power"): switch.switch_schema(
-                Halo2Switch,
-                block_inverted=True,
-                default_restore_mode="DISABLED",
-                icon="mdi:power",
-            ),
             cv.Required("ultrasonic"): switch.switch_schema(
-                Halo2Switch,
+                Halo2UltrasonicSwitch,
                 block_inverted=True,
                 default_restore_mode="RESTORE_DEFAULT_OFF",
                 icon="mdi:motion-sensor",
@@ -109,9 +103,7 @@ async def to_code(config):
         cg.add(var.set_radio_channel(config["radio_channel"]))
     await light.new_light(config["front_light"], var, True)
     await light.new_light(config["back_light"], var, False)
-    power = await switch.new_switch(config["power"], var, True)
-    cg.add(var.set_power_switch(power))
-    ultrasonic = await switch.new_switch(config["ultrasonic"], var, False)
+    ultrasonic = await switch.new_switch(config["ultrasonic"], var)
     cg.add(var.set_ultrasonic_switch(ultrasonic))
     status = await text_sensor.new_text_sensor(config["radio_status"])
     cg.add(var.set_radio_status(status))

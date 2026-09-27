@@ -43,10 +43,13 @@ template<class Transport> class Radio {
       return fail("expected LR1121 transceiver firmware");
 
     // Configure the board in STBY_RC before enabling its 3.0 V TCXO.
-    // DIO5 selects RX and DIO6 TX on the Waveshare RF switch.
+    // DIO5/DIO6 control only the sub-GHz antenna switch; RFIO_HF uses a
+    // separate connector. Hold DIO5 high and DIO6 low in every mode to keep
+    // the unused sub-GHz PA isolated on the RTC6603SP's receive path.
+    // The switch has no documented both-off state.
     if (!write(0x011C, {0x00}) ||
         !write(0x0110, {0x01}) ||  // DC-DC regulator
-        !write(0x0112, {0x03, 0x00, 0x01, 0x02, 0x02, 0x02, 0x00, 0x00}) ||
+        !write(0x0112, {0x03, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00}) ||
         !write(0x0117, {0x06, 0x00, 0x01, 0x2C}) ||  // 3.0 V, 300 RTC ticks
         !write(0x010E, {}) ||  // clear the expected pre-TCXO startup errors
         !write(0x010F, {0x3F}, 100000)) return false;

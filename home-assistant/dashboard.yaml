@@ -6,13 +6,6 @@ views:
     icon: mdi:monitor-shimmer
     cards:
       - type: tile
-        entity: switch.benq_screenbar_halo_2_power
-        name: Power
-        icon: mdi:power
-        tap_action:
-          action: toggle
-
-      - type: tile
         entity: light.benq_screenbar_halo_2_front_lamp
         name: Front
         icon: mdi:desk-lamp

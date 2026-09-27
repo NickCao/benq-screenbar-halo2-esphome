@@ -41,9 +41,6 @@ halo2:
     initial_state:
       brightness: 91%
       color_temperature: 3925 K
-  power:
-    id: screenbar_power
-    name: "Power"
   ultrasonic:
     id: pir_switch
     name: "Ultrasonic sensor"
