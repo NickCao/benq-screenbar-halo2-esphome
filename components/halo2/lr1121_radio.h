@@ -20,6 +20,9 @@ template<class Transport> class Radio {
   uint8_t channel() const { return channel_; }
   bool discovering() const { return discovering_; }
   uint32_t capture_count() const { return capture_count_; }
+  uint32_t rx_count() const { return rx_count_; }
+  uint32_t last_irq() const { return last_irq_; }
+  const halo2_protocol::AirFrame &rx_frame() const { return rx_frame_; }
   const std::array<uint8_t, 25> &capture_data() const { return capture_data_; }
 
   bool setup(uint32_t deviation_hz = 160000, uint8_t pulse_shape = 0x09,
@@ -63,11 +66,12 @@ template<class Transport> class Radio {
         !write(0x020F, {0x00, 0x01, 0xE8, 0x48, pulse_shape, 0x09,
                         byte(deviation_hz, 24), byte(deviation_hz, 16), byte(deviation_hz, 8), byte(deviation_hz, 0)}))
       return false;
-    // 32-bit TX preamble, 8-bit RX preamble detection, 32-bit sync/address.
+    // 32-bit TX preamble and 32-bit sync/address. Do not gate RX on preamble:
+    // a lamp ACK has a short preamble immediately after our TX/RX turnaround.
     // Fixed 14-byte captures: 9-bit PCF + payload + software CRC + padding.
     // No whitening, hardware CRC, length byte, address filter, or auto-ACK.
     const auto air = halo2_protocol::air_address(address_);
-    if (!write(0x0210, {0x00, 0x20, 0x04, 0x20, 0x00, 0x00, halo2_protocol::AIR_FRAME_SIZE, 0x01, 0x00}) ||
+    if (!write(0x0210, {0x00, 0x20, 0x00, 0x20, 0x00, 0x00, halo2_protocol::AIR_FRAME_SIZE, 0x01, 0x00}) ||
         !write(0x0206, {air[0], air[1], air[2], air[3], 0, 0, 0, 0}) ||
         !write(0x0215, {0x02, 0x00, 0x04, 0x00}) ||  // HF PA, VREG, Waveshare duty cycle
         !write(0x0211, {0x00, 0x02}) ||  // 0 dBm, 48 us ramp
@@ -86,6 +90,9 @@ template<class Transport> class Radio {
     if (!ready_ || discovering_) return false;
     bool sent = false;
     if (write(0x011C, {0x00}) && clear_irq() &&
+        // Switch straight from TX to a single 20 ms RX window in hardware.
+        // Reconfiguring RX over SPI after TX_DONE can miss the lamp's ACK.
+        write(0x020C, {0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x90}) &&
         write(0x0109, frame.data(), frame.size()) &&
         write(0x020A, {0x00, 0x02, 0x90})) {  // ~20 ms hardware TX timeout
       const auto start = transport_.now_us();
@@ -101,12 +108,14 @@ template<class Transport> class Radio {
       }
       if (!sent && ready_) fail("TX completion timeout");
     }
-    // Attempt to leave TX even on a failed command or a missing TX_DONE IRQ.
-    // Preserve the original failure if reception can be restored.
-    const bool receiving = start_receive();
-    ready_ = receiving;
-    if (sent && receiving) error_[0] = '\0';
-    return sent && receiving;
+    if (sent) {
+      // Leave the automatic RX window and any captured reply intact for poll().
+      error_[0] = '\0';
+      return true;
+    }
+    // Restore passive RX on a failed command or a missing TX_DONE interrupt.
+    ready_ = start_receive();
+    return false;
   }
 
   bool poll(halo2_protocol::HaloRxState &state) {
@@ -114,7 +123,10 @@ template<class Transport> class Radio {
     if (!ready_ || discovering_ || !transport_.irq()) return false;
     uint32_t irq = 0;
     if (!get_irq(irq)) return false;
+    last_irq_ = irq;
     if (irq & (IRQ_ERROR | IRQ_CMD_ERROR)) return fail("radio error during RX");
+    // TX_DONE can be visible before the automatic RX window finishes.
+    if (!(irq & (IRQ_RX_DONE | IRQ_TIMEOUT))) return false;
     halo2_protocol::AirFrame frame{};
     bool received = false;
     if (irq & IRQ_RX_DONE) {
@@ -123,13 +135,14 @@ template<class Transport> class Radio {
       if (buffer[0] == frame.size()) {
         // ReadBuffer8 must use the offset returned by GetRxBufferStatus.
         if (!read(0x010A, {buffer[1], buffer[0]}, frame.data(), frame.size())) return false;
+        rx_frame_ = frame;
+        ++rx_count_;
         received = true;
       }
     }
-    // Single RX holds the first frame until polling, so the lamp's immediate
-    // reply cannot overwrite an authoritative controller request in the FIFO.
+    // Hold one complete packet until polling; then return to passive RX.
     if (!start_receive()) return false;
-    return received && halo2_protocol::decode_air_frame(frame.data(), frame.size(), state, address_);
+    return received && halo2_protocol::decode_air_frame(frame.data(), frame.size(), state, address_, true);
   }
 
   bool listen_for_address(uint8_t channel, uint8_t sync_byte) {
@@ -169,7 +182,7 @@ template<class Transport> class Radio {
   bool use_address(const halo2_protocol::Address &address, uint8_t channel) {
     const auto air = halo2_protocol::air_address(address);
     if (!set_frequency(channel) ||
-        !write(0x0210, {0x00, 0x20, 0x04, 0x20, 0x00, 0x00, halo2_protocol::AIR_FRAME_SIZE, 0x01, 0x00}) ||
+        !write(0x0210, {0x00, 0x20, 0x00, 0x20, 0x00, 0x00, halo2_protocol::AIR_FRAME_SIZE, 0x01, 0x00}) ||
         !write(0x0206, {air[0], air[1], air[2], air[3], 0, 0, 0, 0}) || !start_receive()) return false;
     address_ = address;
     discovering_ = false;
@@ -190,6 +203,9 @@ template<class Transport> class Radio {
   uint8_t discovery_sync_{0xAA};
   uint32_t capture_count_{0};
   std::array<uint8_t, 25> capture_data_{};
+  halo2_protocol::AirFrame rx_frame_{};
+  uint32_t rx_count_{0};
+  uint32_t last_irq_{0};
   uint16_t firmware_version_ = 0;
   char error_[96] = "LR1121 not initialized";
 
@@ -260,7 +276,11 @@ template<class Transport> class Radio {
     return true;
   }
   bool start_receive() {
-    return clear_irq() && write(0x011C, {0x00}) && write(0x010B, {}) && write(0x0209, {0, 0, 0});
+    // AutoTxRx is bidirectional: disable it before SetRx so overhearing the
+    // original controller never makes us transmit an unsolicited ACK.
+    return write(0x011C, {0x00}) &&
+           write(0x020C, {0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00}) &&
+           clear_irq() && write(0x010B, {}) && write(0x0209, {0, 0, 0});
   }
 };
 }  // namespace lr1121_halo2

@@ -27,7 +27,9 @@ class Halo2 : public PollingComponent {
   void set_auto_discover(bool value) { auto_discover_ = value; }
   void set_radio_address(const halo2_protocol::Address &value) { radio_address_ = value; address_configured_ = true; }
   void set_radio_channel(uint8_t value) { radio_channel_ = value; }
+  void set_status_poll_interval(uint32_t value) { status_poll_interval_ = value; }
   void start_discovery();
+  void start_auto_brightness();
 
   bool accepts_commands() const { return ready_ && !publishing_ && !discovering_; }
   void control_light(light::LightState *light, bool front);
@@ -41,6 +43,7 @@ class Halo2 : public PollingComponent {
   void synchronize_temperature_(light::LightState *source);
   void publish_status_(const char *status);
   void save_mode_();
+  void apply_received_(const halo2_protocol::HaloRxState &received);
   void publish_address_();
   bool scan_channel_();
 
@@ -76,6 +79,16 @@ class Halo2 : public PollingComponent {
   uint32_t frequency_deviation_{160000};
   uint8_t pulse_shape_{0x09};
   uint8_t pending_command_{0};
+  bool pending_auto_brightness_{false};
+  uint32_t status_poll_interval_{0};
+  uint32_t next_status_poll_{0};
+  uint32_t status_poll_started_{0};
+  uint32_t status_request_started_{0};
+  uint8_t status_request_pcf_{0};
+  uint8_t status_read_attempts_{0};
+  uint8_t status_timeouts_{0};
+  bool awaiting_status_{false};
+  bool status_followup_{false};
   uint8_t saved_mode_{3};
   bool ready_{false};
   bool publishing_{false};
@@ -120,6 +133,15 @@ class Halo2DiscoverButton : public button::Button {
 
  protected:
   void press_action() override { parent_->start_discovery(); }
+  Halo2 *parent_;
+};
+
+class Halo2AutoButton : public button::Button {
+ public:
+  explicit Halo2AutoButton(Halo2 *parent) : parent_(parent) {}
+
+ protected:
+  void press_action() override { parent_->start_auto_brightness(); }
   Halo2 *parent_;
 };
 

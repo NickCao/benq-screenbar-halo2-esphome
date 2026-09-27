@@ -2,7 +2,7 @@
 
 [![Validate](https://github.com/Termina1/benq-screenbar-halo2-esphome/actions/workflows/validate.yml/badge.svg)](https://github.com/Termina1/benq-screenbar-halo2-esphome/actions/workflows/validate.yml)
 
-Control a **BenQ ScreenBar HALO 2** through Home Assistant's encrypted ESPHome native API. The bridge exposes **Front lamp** and **Back lamp** as lights with separate power and brightness controls and a shared color temperature. It can also enable the lamp's ultrasonic presence mode and listen to commands from the original controller.
+Control a **BenQ ScreenBar HALO 2** through Home Assistant's encrypted ESPHome native API. The bridge exposes **Front lamp** and **Back lamp** as lights with separate power and brightness controls and a shared color temperature. It also supports Auto brightness, ultrasonic presence mode, and commands from the original controller. The LR1121 profile polls the lamp to keep HA updated after automatic changes.
 
 The primary hardware is the **Waveshare ESP32-S3-LR1121-HF**, using its onboard radio at 2.4 GHz in GFSK mode. The older **M5Stack ATOM Lite + BM5602** implementation is retained as an alternative.
 
@@ -69,8 +69,9 @@ The saved link is reused after reboot. Use **Discover lamp address** to learn an
 |---|---|
 | Front lamp | Front on/off, brightness, and shared color temperature |
 | Back lamp | Back on/off, brightness, and shared color temperature |
+| Auto brightness | Activates the lamp's automatic brightness adjustment |
 | Ultrasonic sensor | Normal toggle for the lamp's automatic presence mode; it does not report occupancy |
-| Radio status | Initialization, discovery, controller reception, and command/error status |
+| Radio status | Initialization, discovery, controller reception, lamp polling, and command/error status |
 | Radio address | Learned/configured address and frequency; LR1121 only |
 | Discover lamp address | Starts a new passive scan; LR1121 only |
 | Resend current state | Reapplies the bridge's current settings and power state |
@@ -88,9 +89,11 @@ HA's normal “all lights” controls operate both sections. For one dedicated S
 
 HA commands update the bridge's state optimistically. CRC-valid requests heard from the original controller update the same state and are published to HA without echoing another radio command. A later received full-state request can recover missed controller changes.
 
-This is **best-effort synchronization**, not polling the lamp. Lamp reply frames are ignored because their control byte is not a reliable state snapshot. Presence-triggered changes, power interruptions, or missed controller transmissions can leave HA out of sync. **Command sent** means local radio transmission completed, not that the lamp acknowledged or applied it.
+The **LR1121 profile queries the lamp every five seconds**, so presence-triggered on/off, Auto brightness adjustments, and missed controller changes are reflected in HA after the next successful poll. Each cycle refreshes the lamp's queued status, waits half a second, and reads it back. The first reply can contain old state and is discarded, preventing it from undoing a recent HA command. Local commands trigger an earlier refresh.
 
-Operate the original controller to provide a fresh observed state, or use **Resend current state** to impose HA's current settings on the lamp. The latter sends commands; it does not query the lamp.
+After three failed polling cycles, **Radio status** reports that lamp status is unavailable; the lights retain their last known state. A successful reply restores synchronization. **Command sent** means local radio transmission completed; **Lamp status received** indicates an actual status reply. See [polling configuration](docs/CONFIGURATION.md#component-options).
+
+The legacy **BM5602 profile only listens to controller requests**. It does not poll the lamp, so autonomous changes or missed traffic can leave its HA state stale. **Resend current state** reapplies HA's settings to the lamp on either profile; it is not a status query.
 
 ## Updates and logs
 

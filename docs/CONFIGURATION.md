@@ -40,8 +40,10 @@ The schema is defined in [`components/halo2/__init__.py`](../components/halo2/__
 | `radio` | Required: `LR1121` or `BM5602`; set by the board profile |
 | `front_light`, `back_light` | Required native light configurations; separate brightness and shared color temperature |
 | `ultrasonic` | Required switch enabling the lamp's presence mode; not an occupancy sensor |
+| `auto_button` | Optional button activating the lamp's automatic brightness adjustment; included in the common package |
 | `radio_status` | Required diagnostic text sensor |
-| `update_interval` | Radio polling and pending-command processing interval; default `50ms` |
+| `update_interval` | Receive-buffer checks and pending-command processing interval; default `50ms` |
+| `status_poll_interval` | LR1121 only; interval between lamp status refresh cycles, default `5s`, minimum `1s` |
 | `auto_discover` | LR1121 only; defaults to true, starts discovery when neither an explicit nor saved link exists |
 | `radio_address` | LR1121 only; four bytes in register order, overriding the saved link at boot |
 | `radio_channel` | LR1121 only; `5`, `46`, or `75`, corresponding to 2405, 2446, or 2475 MHz; default `5` before discovery/restoration |
@@ -52,7 +54,9 @@ The schema is defined in [`components/halo2/__init__.py`](../components/halo2/__
 
 The Waveshare profile includes both discovery entities. Keep its validated RF settings unless investigating a different radio variant. `frequency_deviation_hz` and `pulse_shape` do not tune the BM5602 backend.
 
-Leave the polling interval at 50 ms for normal use. Faster polling increases synchronous radio traffic and reduces time available to networking.
+Leave `update_interval` at 50 ms for normal use. It controls local processing, not how often status queries are transmitted. `status_poll_interval` controls those queries independently; each cycle normally uses two requests about half a second apart to discard the lamp's old queued reply before reading fresh state. Up to two extra reads drain any additional queued command replies. Replies are checked without blocking ESPHome while waiting. Faster processing or status polling increases radio work.
+
+HA commands schedule a status refresh after 500 ms. Polling pauses during light transitions and discovery. Three consecutive failed cycles produce a **Radio status** warning and retain the last known light states; successful polling clears it. The BM5602 profile has no active status polling.
 
 The component currently supports one radio/bridge instance per device and uses the fixed board pins described in [wiring](WIRING.md).
 
@@ -60,11 +64,13 @@ The component currently supports one radio/bridge instance per device and uses t
 
 Both lights use zero-length transitions by default and `gamma_correct: 1.0`; other gamma values are rejected because the lamp already accepts brightness percentages. Their restore mode is `RESTORE_DEFAULT_OFF`.
 
-The common package provides initial brightness values of 12% front / 91% back and a shared 3925 K temperature. These are initial defaults, not address-discovery requirements. Saved light preferences take precedence on later boots. Initialization restores the bridge's last known state without transmitting it to the lamp.
+The common package provides initial brightness values of 12% front / 91% back and a shared 3925 K temperature. These are initial defaults, not address-discovery requirements. Saved light preferences take precedence on later boots. Initialization restores the bridge's last known state without sending settings or power commands. LR1121 then queries the lamp to obtain its actual state.
 
 The hardware temperature range is 2700–6500 K in 25 K steps. A change through either light is mirrored to the other. Brightness is 1–100% when lit; zero brightness is treated as off. Last useful brightness is retained when turning a section off.
 
-There is no `power:` option or master Power switch. The front/back light states determine global power and the selected lighting mode. The ultrasonic switch displays a normal toggle using the last commanded or received value; this does not add lamp acknowledgements.
+There is no `power:` option or master Power switch. The front/back light states determine global power and the selected lighting mode. The ultrasonic switch displays a normal toggle using the last commanded or received value. LR1121 polling updates that value from the lamp as well.
+
+Press **Auto brightness** with the lamp on to activate its automatic adjustment. It is a button, not a separate on/off entity. Ordinary manual brightness commands resume manual control. On LR1121, the resulting brightness and temperature are read back through status polling.
 
 ## LR1121 manual address
 

@@ -1,6 +1,7 @@
 #include "halo2.h"
 
 #include <algorithm>
+#include <cinttypes>
 #include <cmath>
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
@@ -90,6 +91,7 @@ void Halo2::setup() {
   ready_ = true;
 #endif
   publish_status_("Listening");
+  next_status_poll_ = millis() + 1000;
 }
 
 void Halo2::publish_address_() {
@@ -104,6 +106,9 @@ void Halo2::start_discovery() {
 #ifdef USE_HALO2_LR1121
   if (!ready_) return;
   pending_command_ = 0;
+  pending_auto_brightness_ = false;
+  awaiting_status_ = false;
+  status_followup_ = false;
   candidates_ = {};
   scan_step_ = 0;
   discovering_ = true;
@@ -180,6 +185,7 @@ void Halo2::loop() {
       const SavedLink saved{address, channel, 2, received.packet_options, 0};
       const bool persisted = link_preference_.save(&saved) && global_preferences->sync();
       state_ = received;
+      next_status_poll_ = millis() + 1000;
       save_mode_();
       publish_lights_();
       ultrasonic_switch_->publish_state(state_.pir);
@@ -199,7 +205,7 @@ void Halo2::loop() {
     return;
   }
   if (millis() - scan_started_ >= 3000) {
-    ESP_LOGD(TAG, "Discovery captured %u buffers", halo2_radio::radio.capture_count());
+    ESP_LOGD(TAG, "Discovery captured %" PRIu32 " buffers", halo2_radio::radio.capture_count());
     scan_step_ = (scan_step_ + 1) % 6;
     scan_channel_();
   }
@@ -209,7 +215,9 @@ void Halo2::loop() {
 void Halo2::dump_config() {
   ESP_LOGCONFIG(TAG, "ScreenBar HALO 2:");
 #ifdef USE_HALO2_LR1121
-  ESP_LOGCONFIG(TAG, "  Radio: LR1121, deviation: %u Hz, pulse shape: 0x%02X", frequency_deviation_, pulse_shape_);
+  ESP_LOGCONFIG(TAG, "  Radio: LR1121, deviation: %" PRIu32 " Hz, pulse shape: 0x%02X",
+                frequency_deviation_, pulse_shape_);
+  ESP_LOGCONFIG(TAG, "  Lamp status interval: %" PRIu32 " ms", status_poll_interval_);
 #else
   ESP_LOGCONFIG(TAG, "  Radio: BM5602");
 #endif
@@ -221,6 +229,12 @@ void Halo2::queue_command_(uint8_t command) {
   // Mode/brightness commands do not change global power. Preserve a power
   // command through the entire batch, in either direction.
   if (pending_command_ != 0x02) pending_command_ = command;
+}
+
+void Halo2::start_auto_brightness() {
+  if (!accepts_commands()) return;
+  pending_auto_brightness_ = true;
+  queue_command_(0x03);
 }
 
 void Halo2::control_light(light::LightState *light, bool front) {
@@ -245,6 +259,7 @@ void Halo2::control_light(light::LightState *light, bool front) {
   uint8_t &stored_brightness = front ? state_.front_brightness : state_.back_brightness;
   const uint16_t temperature = temperature_kelvin(values.get_color_temperature());
   const bool temperature_changed = temperature != state_.color_temperature;
+  if (brightness != stored_brightness || temperature_changed) pending_auto_brightness_ = false;
   const bool settings_changed = brightness != stored_brightness || temperature_changed ||
                                 was_front != state_.front || was_back != state_.back;
   stored_brightness = brightness;
@@ -316,16 +331,44 @@ void Halo2::save_mode_() {
   mode_preference_.save(&saved_mode_);
 }
 
+void Halo2::apply_received_(const halo2_protocol::HaloRxState &received) {
+  const bool changed = !state_.valid || received.power != state_.power || received.front != state_.front ||
+                       received.back != state_.back || received.pir != state_.pir ||
+                       received.front_brightness != state_.front_brightness ||
+                       received.back_brightness != state_.back_brightness ||
+                       received.color_temperature != state_.color_temperature;
+#ifdef USE_HALO2_LR1121
+  if (received.packet_options != state_.packet_options) {
+    const SavedLink saved{radio_address_, radio_channel_, 2, received.packet_options, 0};
+    link_preference_.save(&saved);
+  }
+#endif
+  state_ = received;
+  if (changed) {
+    save_mode_();
+    publish_lights_();
+    ultrasonic_switch_->publish_state(state_.pir);
+  }
+  status_clear_warning();
+  publish_status_(received.reply ? "Lamp status received" : "Controller update received");
+}
+
 void Halo2::update() {
   if (!ready_ || discovering_) return;
   if (pending_command_ != 0) {
     const uint8_t command = pending_command_;
+    const bool auto_brightness = pending_auto_brightness_;
     pending_command_ = 0;
+    pending_auto_brightness_ = false;
+    // A reply to an earlier query must not overwrite a newer local command.
+    awaiting_status_ = false;
+    status_followup_ = false;
     const auto send = [&](uint8_t opcode) {
       ESP_LOGD(TAG, "TX command 0x%02X, power %s, mode %u/%u", opcode, ONOFF(state_.power),
                state_.front, state_.back);
       return halo2_radio::send_halo_state(opcode, state_.power, state_.pir, state_.front, state_.back,
-          state_.front_brightness, state_.back_brightness, state_.color_temperature, state_.packet_options);
+          state_.front_brightness, state_.back_brightness, state_.color_temperature, state_.packet_options,
+          auto_brightness && opcode == 0x03);
     };
     // Power-on must apply the final combined settings and explicitly switch
     // the lamp on. Settings alone leave a powered-off lamp off.
@@ -340,27 +383,90 @@ void Halo2::update() {
       // TX completion is not an acknowledgement from the lamp.
       publish_status_("Command sent");
     }
+    // Let the lamp finish applying settings before asking for actual state.
+    next_status_poll_ = millis() + 500;
     return;
   }
 
   halo2_protocol::HaloRxState received;
-  if (halo2_radio::poll_halo_receive(received) && received.valid) {
 #ifdef USE_HALO2_LR1121
-    if (received.packet_options != state_.packet_options) {
-      const SavedLink saved{radio_address_, radio_channel_, 2, received.packet_options, 0};
-      link_preference_.save(&saved);
-    }
+  const uint32_t previous_rx_count = halo2_radio::radio.rx_count();
 #endif
-    state_ = received;
-    save_mode_();
-    publish_lights_();
-    ultrasonic_switch_->publish_state(state_.pir);
-    status_clear_warning();
-    publish_status_("Controller update received");
+  const bool received_state = halo2_radio::poll_halo_receive(received);
+#ifdef USE_HALO2_LR1121
+  if (awaiting_status_ && halo2_radio::radio.rx_count() != previous_rx_count) {
+    const auto &frame = halo2_radio::radio.rx_frame();
+    ESP_LOGV(TAG, "Status RX: %s, decoded %s, PCF %02X/%02X, command %02X",
+             format_hex_pretty(frame.data(), frame.size()).c_str(), YESNO(received_state),
+             received.pcf, status_request_pcf_, received.command);
+  }
+#endif
+  if (received_state && received.valid) {
+    if (!received.reply) {
+      awaiting_status_ = false;
+      status_followup_ = false;
+      apply_received_(received);
+      next_status_poll_ = millis() + 500;
+    } else if (awaiting_status_ && (received.pcf & 0x06U) == (status_request_pcf_ & 0x06U)) {
+      if (!status_followup_ || (received.command != 0x04 && status_read_attempts_ < 3)) {
+        // The first ACK confirms delivery, but its payload was queued before
+        // the request. Give the lamp time to refresh it before reading again.
+        // Drain any additional queued command ACKs with bounded read retries.
+        awaiting_status_ = false;
+        status_followup_ = true;
+        next_status_poll_ = millis() + 500;
+      } else if (received.command == 0x04) {
+        awaiting_status_ = false;
+        status_followup_ = false;
+        status_timeouts_ = 0;
+        if (!front_light_->is_transformer_active() && !back_light_->is_transformer_active()) {
+          apply_received_(received);
+          ESP_LOGD(TAG, "Lamp status: power %s, mode %u/%u, front %u%%, back %u%%, %u K",
+                   ONOFF(state_.power), state_.front, state_.back, state_.front_brightness,
+                   state_.back_brightness, state_.color_temperature);
+        }
+      }
+    }
   } else if (const char *error = halo2_radio::last_error()) {
     status_set_warning();
     publish_status_(error);
   }
+
+#ifdef USE_HALO2_LR1121
+  const uint32_t now = millis();
+  if (awaiting_status_ && now - status_request_started_ >= 200) {
+    awaiting_status_ = false;
+    status_followup_ = false;
+    if (status_timeouts_ < 3) ++status_timeouts_;
+    ESP_LOGD(TAG, "Lamp status query timed out (%u consecutive, IRQ %08" PRIX32 ")", status_timeouts_,
+             halo2_radio::radio.last_irq());
+    if (status_timeouts_ >= 3) {
+      status_set_warning();
+      publish_status_("Lamp status unavailable; retaining last known state");
+    }
+  }
+  if (awaiting_status_ || static_cast<int32_t>(now - next_status_poll_) < 0 ||
+      front_light_->is_transformer_active() || back_light_->is_transformer_active()) return;
+  const bool followup = status_followup_;
+  if (followup) {
+    ++status_read_attempts_;
+  } else {
+    status_poll_started_ = now;
+    status_read_attempts_ = 0;
+  }
+  next_status_poll_ = status_poll_started_ + status_poll_interval_;
+  ESP_LOGD(TAG, "%s lamp status", followup ? "Reading" : "Refreshing");
+  if (halo2_radio::send_halo_state(0x04, state_.power, state_.pir, state_.front, state_.back,
+          state_.front_brightness, state_.back_brightness, state_.color_temperature, state_.packet_options)) {
+    awaiting_status_ = true;
+    status_request_pcf_ = halo2_radio::halo_last_pcf;
+    status_request_started_ = millis();
+  } else {
+    status_followup_ = false;
+    status_set_warning();
+    publish_status_(halo2_radio::last_error());
+  }
+#endif
 }
 
 }  // namespace esphome::halo2

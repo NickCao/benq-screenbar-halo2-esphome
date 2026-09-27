@@ -45,6 +45,8 @@ halo2:
   ultrasonic:
     id: pir_switch
     name: "Ultrasonic sensor"
+  auto_button:
+    name: "Auto brightness"
   radio_status:
     id: radio_status
     name: "Radio status"

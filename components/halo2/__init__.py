@@ -17,6 +17,7 @@ Halo2 = halo2_ns.class_("Halo2", cg.PollingComponent)
 Halo2Light = halo2_ns.class_("Halo2Light", light.LightOutput)
 Halo2UltrasonicSwitch = halo2_ns.class_("Halo2UltrasonicSwitch", switch.Switch)
 Halo2DiscoverButton = halo2_ns.class_("Halo2DiscoverButton", button.Button)
+Halo2AutoButton = halo2_ns.class_("Halo2AutoButton", button.Button)
 
 LIGHT_SCHEMA = light.light_schema(
     Halo2Light,
@@ -43,6 +44,7 @@ def _validate_radio_options(config):
             "radio_channel",
             "radio_address_sensor",
             "discover_button",
+            "status_poll_interval",
         ):
             if key in config:
                 raise cv.Invalid(f"{key} is currently supported only with LR1121", path=[key])
@@ -65,6 +67,13 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional("discover_button"): button.button_schema(
                 Halo2DiscoverButton, entity_category=ENTITY_CATEGORY_CONFIG,
                 icon="mdi:radar",
+            ),
+            cv.Optional("auto_button"): button.button_schema(
+                Halo2AutoButton, icon="mdi:brightness-auto",
+            ),
+            cv.Optional("status_poll_interval"): cv.All(
+                cv.positive_time_period_milliseconds,
+                cv.Range(min=cv.TimePeriod(milliseconds=1000)),
             ),
             cv.Optional("frequency_deviation_hz", default=160000): cv.int_range(
                 min=1, max=170999
@@ -112,3 +121,7 @@ async def to_code(config):
         cg.add(var.set_radio_address_sensor(address))
     if "discover_button" in config:
         await button.new_button(config["discover_button"], var)
+    if "auto_button" in config:
+        await button.new_button(config["auto_button"], var)
+    if config["radio"] == "LR1121":
+        cg.add(var.set_status_poll_interval(config.get("status_poll_interval", 5000)))
