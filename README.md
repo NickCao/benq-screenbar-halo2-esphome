@@ -17,7 +17,7 @@ Choose one profile for your bridge. Both use the device name `screenbar-halo2`; 
 
 ## Setup with Podman
 
-The commands below use Linux, Bash, and Podman. [`scripts/esphome`](scripts/esphome) runs the validated **ESPHome 2026.4.4** image and caches its tools under the ignored `.esphome/cache/` directory. No host ESPHome installation is required.
+The commands below use Linux, Bash, and Podman. [`scripts/esphome`](scripts/esphome) runs **ESPHome 2026.9.0** and caches its tools under the ignored `.esphome/cache/` directory. ESPHome 2026.9.0 or newer is required for encrypted OTA. No host ESPHome installation is required.
 
 ### 1. Configure credentials
 
@@ -29,7 +29,7 @@ chmod 600 secrets.yaml
 openssl rand -base64 32
 ```
 
-Edit `secrets.yaml`: supply your Wi-Fi SSID and password, separate recovery-AP and OTA passwords, and the generated API encryption key. Keep this file private; it is ignored by Git. Build artifacts contain these credentials too and should not be published.
+Edit `secrets.yaml`: supply your Wi-Fi SSID and password, a separate recovery-AP password, and the generated API encryption key. Native API and OTA both use that key for encryption and authentication; no separate OTA password is needed. Keep this file private; it is ignored by Git. Build artifacts contain these credentials too and should not be published.
 
 ### 2. Compile and flash over USB
 
@@ -93,6 +93,8 @@ This is **best-effort synchronization**, not polling the lamp. Lamp reply frames
 Operate the original controller to provide a fresh observed state, or use **Resend current state** to impose HA's current settings on the lamp. The latter sends commands; it does not query the lamp.
 
 ## Updates and logs
+
+OTA requires encryption and reuses the existing native API key. When upgrading from this project's older password-based firmware, install once over USB using the command above, or follow the [two-step OTA migration](docs/CONFIGURATION.md#encrypted-ota-migration). Simply uploading the new configuration to old firmware over the network will be refused because the old firmware cannot negotiate encryption.
 
 Use the same board profile you initially flashed:
 

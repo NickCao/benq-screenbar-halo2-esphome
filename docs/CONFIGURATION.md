@@ -12,10 +12,24 @@ Copy [`secrets.example.yaml`](../secrets.example.yaml) to `secrets.yaml` and rep
 |---|---|
 | `wifi_ssid`, `wifi_password` | Normal Wi-Fi connection |
 | `fallback_password` | Password for the `Halo2 recovery` access point |
-| `ota_password` | Native ESPHome OTA authentication |
-| `api_encryption_key` | 32-byte base64 key for the encrypted native API; generate with `openssl rand -base64 32` |
+| `api_encryption_key` | 32-byte base64 key shared by the encrypted native API and OTA; generate with `openssl rand -base64 32` |
 
 There are no web-control credentials. The recovery captive portal is for Wi-Fi provisioning, not lamp control. The native API has `reboot_timeout: 0s`, so losing the HA connection does not cause periodic bridge reboots.
+
+Native OTA requires encryption, inheriting `api.encryption.key`. There is no `ota_password` in the normal configuration. Keep the existing API key when upgrading a device already connected to Home Assistant.
+
+## Encrypted OTA migration
+
+ESPHome 2026.9.0 or newer is required; the Podman wrapper pins 2026.9.0. A USB install can enable encrypted OTA directly. After installation, both the firmware and uploader require encrypted native OTA transfers. See [ESPHome's OTA encryption documentation](https://esphome.io/components/ota/esphome/#encryption).
+
+An existing device running older, password-based firmware needs either that USB install or ESPHome's two-step network migration:
+
+1. Temporarily retain the old `password: !secret ota_password` in the common package's OTA block instead of `encryption:`. Keep the API key unchanged, build with ESPHome 2026.9.0, and upload using the old OTA password. This first upload is authenticated but unencrypted. The resulting firmware offers encrypted OTA alongside the old protocol.
+2. Restore the committed `encryption:` block, remove the OTA `password:` line, and build/upload again. This upload is encrypted, and the resulting firmware requires encryption. The startup log should report `Encryption: required`.
+
+Keep the old OTA password in your local `secrets.yaml` until migration succeeds; it can then be removed. Do not regenerate the API key during the migration. Losing or changing that key requires a recovery install, such as USB, before encrypted OTA will work again.
+
+The fallback access point's captive portal remains a local recovery path; it is separate from native encrypted OTA on port 3232.
 
 ## Component options
 

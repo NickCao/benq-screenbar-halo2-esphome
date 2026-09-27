@@ -2,7 +2,7 @@
 set -euo pipefail
 
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-image="${ESPHOME_IMAGE:-ghcr.io/esphome/esphome:2026.4.4}"
+image="${ESPHOME_IMAGE:-ghcr.io/esphome/esphome:2026.9.0}"
 cache_dir="$project_dir/.esphome/cache"
 mkdir -p "$cache_dir"
 
