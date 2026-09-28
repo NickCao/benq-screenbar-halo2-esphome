@@ -3,6 +3,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include "esphome/core/helpers.h"
 
 // Canonical payload representation and the LR1121's 9-bit PCF on-air format.
 namespace halo2_protocol {
@@ -18,46 +20,63 @@ constexpr uint8_t MAX_COMMAND_CODE = 0x05;
 enum LampMode : uint8_t { FRONT_ONLY = 0, BACK_ONLY = 1, BOTH = 2 };
 enum UltrasonicTimeout : uint8_t { MINUTES_3 = 0, MINUTES_5 = 1, MINUTES_10 = 2, MINUTES_15 = 3 };
 constexpr std::array<uint8_t, 4> ULTRASONIC_TIMEOUT_MINUTES{3, 5, 10, 15};
-constexpr uint8_t CONTROL_POWER = 0x01, CONTROL_AUTO_BRIGHTNESS = 0x02, CONTROL_ULTRASONIC = 0x20;
-constexpr uint8_t CONTROL_MODE_MASK = 0x18, CONTROL_MODE_SHIFT = 3;
 constexpr uint8_t PCF_NO_ACK = 0x01, PCF_PID_MASK = 0x06, PCF_PID_SHIFT = 1, PCF_LENGTH_SHIFT = 3;
 constexpr uint8_t PACKET_SUFFIX = 0x02;
 constexpr uint8_t MIN_BRIGHTNESS_PERCENT = 1, MAX_BRIGHTNESS_PERCENT = 100;
 constexpr uint16_t MIN_TEMPERATURE_K = 2700, MAX_TEMPERATURE_K = 6500, TEMPERATURE_STEP_K = 25;
 constexpr uint16_t CRC_INITIAL = 0xFFFF, CRC_POLYNOMIAL = 0x1021, CRC_TOP_BIT = 0x8000;
 
-// Byte offsets in the canonical frame (after removing the leading PCF bit).
-namespace frame {
-enum Field : size_t {
-  PCF,
-  COMMAND,
-  CONTROL,
-  FRONT_BRIGHTNESS,
-  FRONT_TEMPERATURE_HIGH,
-  FRONT_TEMPERATURE_LOW,
-  BACK_BRIGHTNESS,
-  BACK_TEMPERATURE_HIGH,
-  BACK_TEMPERATURE_LOW,
-  ULTRASONIC_TIMEOUT,
-  SUFFIX,
-  CRC_HIGH,
-  CRC_LOW,
-  SIZE
-};
-}  // namespace frame
-constexpr size_t PAYLOAD_SIZE = 10;
-constexpr size_t FRAME_SIZE = frame::SIZE;
-using Payload = std::array<uint8_t, PAYLOAD_SIZE>;
-using Frame = std::array<uint8_t, FRAME_SIZE>;
+// Bit-fields follow the ESP32/GCC layout: least significant bit first.
+struct Control {
+  uint8_t power : 1;
+  uint8_t auto_brightness : 1;
+  uint8_t favorite : 1;
+  LampMode mode : 2;
+  uint8_t ultrasonic : 1;
+  uint8_t reserved : 2;
+} __attribute__((packed));
+
+struct Payload {
+  uint8_t command;
+  Control control;
+  uint8_t front_brightness;
+  uint16_t front_temperature_be;
+  uint8_t back_brightness;
+  uint16_t back_temperature_be;
+  UltrasonicTimeout ultrasonic_timeout;
+  uint8_t suffix;
+} __attribute__((packed));
+
+// Canonical frame after removing the leading bit of the 9-bit PCF.
+struct Frame {
+  uint8_t pcf;
+  Payload payload;
+  uint16_t crc_be;
+} __attribute__((packed));
+
+static_assert(sizeof(Control) == 1);
+static_assert(sizeof(Payload) == 10);
+static_assert(sizeof(Frame) == 13);
+constexpr size_t PAYLOAD_SIZE = sizeof(Payload);
+constexpr size_t FRAME_SIZE = sizeof(Frame);
+using FrameBytes = std::array<uint8_t, FRAME_SIZE>;
 constexpr size_t AIR_FRAME_BITS = FRAME_SIZE * 8 + 1;
 constexpr size_t AIR_FRAME_SIZE = (AIR_FRAME_BITS + 7) / 8;
 using AirFrame = std::array<uint8_t, AIR_FRAME_SIZE>;
+
+struct HaloRxState {
+  bool valid = false, power = false, pir = false, front = false, back = false;
+  bool reply = false;
+  uint8_t command = 0, front_brightness = 0, back_brightness = 0, pcf = 0;
+  UltrasonicTimeout ultrasonic_timeout = UltrasonicTimeout::MINUTES_5;
+  uint16_t color_temperature = 0;
+};
 
 constexpr Address air_address(const Address &address = RADIO_ADDRESS) {
   return {address[3], address[2], address[1], address[0]};
 }
 
-inline uint16_t halo_crc(uint8_t pcf, const uint8_t *payload, size_t length, const Address &address = RADIO_ADDRESS) {
+inline uint16_t halo_crc(uint8_t pcf, const Payload &payload, const Address &address = RADIO_ADDRESS) {
   uint16_t crc = CRC_INITIAL;
   auto feed = [&](uint8_t byte) {
     crc ^= static_cast<uint16_t>(byte) << 8U;
@@ -69,21 +88,24 @@ inline uint16_t halo_crc(uint8_t pcf, const uint8_t *payload, size_t length, con
   // The leading PCF bit is zero for a ten-byte payload and participates in CRC.
   crc = (crc & CRC_TOP_BIT) ? static_cast<uint16_t>((crc << 1U) ^ CRC_POLYNOMIAL) : static_cast<uint16_t>(crc << 1U);
   feed(pcf);
-  for (size_t i = 0; i < length; ++i) feed(payload[i]);
+  for (uint8_t byte : esphome::bit_cast<std::array<uint8_t, PAYLOAD_SIZE>>(payload)) feed(byte);
   return crc;
 }
 
-inline Payload make_payload(uint8_t command, bool power, bool pir, bool front, bool back, uint8_t front_brightness,
-                            uint8_t back_brightness, uint16_t color_temperature,
-                            UltrasonicTimeout ultrasonic_timeout = UltrasonicTimeout::MINUTES_5,
-                            bool auto_brightness = false) {
-  const LampMode mode = front && back ? LampMode::BOTH : (back ? LampMode::BACK_ONLY : LampMode::FRONT_ONLY);
-  const uint8_t control =
-      static_cast<uint8_t>((pir ? CONTROL_ULTRASONIC : 0U) | (mode << CONTROL_MODE_SHIFT) |
-                           (auto_brightness ? CONTROL_AUTO_BRIGHTNESS : 0U) | (power ? CONTROL_POWER : 0U));
-  const auto high = static_cast<uint8_t>(color_temperature >> 8U);
-  const auto low = static_cast<uint8_t>(color_temperature);
-  return {command, control, front_brightness, high, low, back_brightness, high, low, ultrasonic_timeout, PACKET_SUFFIX};
+inline Payload make_payload(uint8_t command, const HaloRxState &state, bool auto_brightness = false) {
+  Payload payload{};
+  payload.command = command;
+  payload.control.power = state.power;
+  payload.control.auto_brightness = auto_brightness;
+  payload.control.mode =
+      state.front && state.back ? LampMode::BOTH : (state.back ? LampMode::BACK_ONLY : LampMode::FRONT_ONLY);
+  payload.control.ultrasonic = state.pir;
+  payload.front_brightness = state.front_brightness;
+  payload.back_brightness = state.back_brightness;
+  payload.front_temperature_be = payload.back_temperature_be = esphome::convert_big_endian(state.color_temperature);
+  payload.ultrasonic_timeout = state.ultrasonic_timeout;
+  payload.suffix = PACKET_SUFFIX;
+  return payload;
 }
 
 inline uint8_t request_pcf(uint8_t pid) {
@@ -91,17 +113,11 @@ inline uint8_t request_pcf(uint8_t pid) {
 }
 
 inline Frame make_frame(uint8_t pcf, const Payload &payload, const Address &address = RADIO_ADDRESS) {
-  Frame frame{};
-  frame[frame::PCF] = pcf;
-  for (size_t i = 0; i < payload.size(); ++i) frame[i + frame::COMMAND] = payload[i];
-  const uint16_t crc = halo_crc(pcf, payload.data(), payload.size(), address);
-  frame[frame::CRC_HIGH] = static_cast<uint8_t>(crc >> 8U);
-  frame[frame::CRC_LOW] = static_cast<uint8_t>(crc);
-  return frame;
+  return {pcf, payload, esphome::convert_big_endian(halo_crc(pcf, payload, address))};
 }
 
 inline AirFrame make_air_frame(uint8_t pcf, const Payload &payload, const Address &address) {
-  const auto frame = make_frame(pcf, payload, address);
+  const auto frame = esphome::bit_cast<FrameBytes>(make_frame(pcf, payload, address));
   AirFrame air{};
   for (size_t i = 0; i < frame.size(); ++i) {
     air[i] |= frame[i] >> 1U;
@@ -110,46 +126,38 @@ inline AirFrame make_air_frame(uint8_t pcf, const Payload &payload, const Addres
   return air;
 }
 
-struct HaloRxState {
-  bool valid = false, power = false, pir = false, front = false, back = false;
-  bool reply = false;
-  uint8_t command = 0, front_brightness = 0, back_brightness = 0, pcf = 0;
-  UltrasonicTimeout ultrasonic_timeout = UltrasonicTimeout::MINUTES_5;
-  uint16_t color_temperature = 0;
-};
-
 inline bool decode_frame(const uint8_t *raw, size_t length, HaloRxState &state, const Address &address = RADIO_ADDRESS,
                          bool allow_reply = false) {
   state = {};
-  if (length != FRAME_SIZE || raw[frame::ULTRASONIC_TIMEOUT] > UltrasonicTimeout::MINUTES_15 ||
-      raw[frame::SUFFIX] != PACKET_SUFFIX)
-    return false;
+  if (length != FRAME_SIZE) return false;
+  Frame frame;
+  std::memcpy(&frame, raw, sizeof(frame));
+  const auto &payload = frame.payload;
+  if (payload.ultrasonic_timeout > UltrasonicTimeout::MINUTES_15 || payload.suffix != PACKET_SUFFIX) return false;
   // Bit 0 is No-ACK: lamp replies set it. Discovery accepts requests only;
   // normal reception may decode replies for a matching status query.
-  if ((raw[frame::PCF] >> PCF_LENGTH_SHIFT) != PAYLOAD_SIZE || (!allow_reply && (raw[frame::PCF] & PCF_NO_ACK)) ||
-      raw[frame::COMMAND] > MAX_COMMAND_CODE)
+  if ((frame.pcf >> PCF_LENGTH_SHIFT) != PAYLOAD_SIZE || (!allow_reply && (frame.pcf & PCF_NO_ACK)) ||
+      payload.command > MAX_COMMAND_CODE)
     return false;
-  const uint16_t crc = static_cast<uint16_t>((raw[frame::CRC_HIGH] << 8U) | raw[frame::CRC_LOW]);
-  if (halo_crc(raw[frame::PCF], raw + frame::COMMAND, PAYLOAD_SIZE, address) != crc) return false;
-  const uint8_t mode = (raw[frame::CONTROL] & CONTROL_MODE_MASK) >> CONTROL_MODE_SHIFT;
-  const uint16_t temperature =
-      static_cast<uint16_t>((raw[frame::FRONT_TEMPERATURE_HIGH] << 8U) | raw[frame::FRONT_TEMPERATURE_LOW]);
-  if (mode > LampMode::BOTH || raw[frame::FRONT_BRIGHTNESS] < MIN_BRIGHTNESS_PERCENT ||
-      raw[frame::FRONT_BRIGHTNESS] > MAX_BRIGHTNESS_PERCENT || raw[frame::BACK_BRIGHTNESS] < MIN_BRIGHTNESS_PERCENT ||
-      raw[frame::BACK_BRIGHTNESS] > MAX_BRIGHTNESS_PERCENT || temperature < MIN_TEMPERATURE_K ||
+  if (halo_crc(frame.pcf, payload, address) != esphome::convert_big_endian(frame.crc_be)) return false;
+  const LampMode mode = payload.control.mode;
+  const uint16_t temperature = esphome::convert_big_endian(payload.front_temperature_be);
+  if (mode > LampMode::BOTH || payload.front_brightness < MIN_BRIGHTNESS_PERCENT ||
+      payload.front_brightness > MAX_BRIGHTNESS_PERCENT || payload.back_brightness < MIN_BRIGHTNESS_PERCENT ||
+      payload.back_brightness > MAX_BRIGHTNESS_PERCENT || temperature < MIN_TEMPERATURE_K ||
       temperature > MAX_TEMPERATURE_K)
     return false;
-  state.pcf = raw[frame::PCF];
-  state.reply = raw[frame::PCF] & PCF_NO_ACK;
-  state.command = raw[frame::COMMAND];
-  state.power = raw[frame::CONTROL] & CONTROL_POWER;
-  state.pir = raw[frame::CONTROL] & CONTROL_ULTRASONIC;
+  state.pcf = frame.pcf;
+  state.reply = frame.pcf & PCF_NO_ACK;
+  state.command = payload.command;
+  state.power = payload.control.power;
+  state.pir = payload.control.ultrasonic;
   state.front = mode == LampMode::FRONT_ONLY || mode == LampMode::BOTH;
   state.back = mode == LampMode::BACK_ONLY || mode == LampMode::BOTH;
-  state.front_brightness = raw[frame::FRONT_BRIGHTNESS];
-  state.back_brightness = raw[frame::BACK_BRIGHTNESS];
+  state.front_brightness = payload.front_brightness;
+  state.back_brightness = payload.back_brightness;
   state.color_temperature = temperature;
-  state.ultrasonic_timeout = static_cast<UltrasonicTimeout>(raw[frame::ULTRASONIC_TIMEOUT]);
+  state.ultrasonic_timeout = payload.ultrasonic_timeout;
   state.valid = true;
   return true;
 }
@@ -158,7 +166,7 @@ inline bool decode_air_frame(const uint8_t *raw, size_t length, HaloRxState &sta
                              bool allow_reply = false) {
   state = {};
   if (length != AIR_FRAME_SIZE || (raw[0] & 0x80U)) return false;
-  Frame frame{};
+  FrameBytes frame{};
   for (size_t i = 0; i < frame.size(); ++i) frame[i] = static_cast<uint8_t>((raw[i] << 1U) | (raw[i + 1] >> 7U));
   return decode_frame(frame.data(), frame.size(), state, address, allow_reply);
 }

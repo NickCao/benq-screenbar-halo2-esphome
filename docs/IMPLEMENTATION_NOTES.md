@@ -8,7 +8,7 @@ The bridge follows the [ESPHome external-component layout](https://esphome.io/co
 |---|---|
 | `__init__.py` | Configuration validation, entity creation, SPI registration, and GPIO code generation |
 | `halo2.h`, `halo2.cpp` | One shared lamp state, native entity adapters, command batching, status polling, preference storage, and discovery coordination |
-| `halo2_protocol.h` | Payloads, CRC, canonical/air-frame conversion, validation, and address extraction; independent of ESPHome and GPIO |
+| `halo2_protocol.h` | Packed payload/frame structs, CRC, canonical/air-frame conversion, validation, and address extraction; uses ESPHome's byte-order and bit-casting helpers |
 | `lr1121_radio.h` | LR1121 command/packet handling using ESPHome `SPIDevice` and GPIO |
 
 `Halo2` owns the HA-facing state, its LR1121 driver, and the packet sequence counter. The driver uses ESPHome's SPI and GPIO interfaces; protocol encoding remains separate from hardware access.

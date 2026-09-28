@@ -277,9 +277,7 @@ void Halo2::queue_command_(Command command) {
 
 bool Halo2::send_state_(uint8_t command, bool auto_brightness) {
   if (!radio_.ready()) return false;
-  const auto payload = protocol::make_payload(command, state_.power, state_.pir, state_.front, state_.back,
-                                              state_.front_brightness, state_.back_brightness, state_.color_temperature,
-                                              state_.ultrasonic_timeout, auto_brightness);
+  const auto payload = protocol::make_payload(command, state_, auto_brightness);
   last_pcf_ = protocol::request_pcf(app_pid_++);
   return radio_.send(protocol::make_air_frame(last_pcf_, payload, radio_.address()));
 }
