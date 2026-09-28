@@ -8,11 +8,10 @@
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "halo2_protocol.h"
 #include "lr1121_radio.h"
-#include "lr1121_transport.h"
 
 namespace esphome::halo2 {
 
-class Halo2 : public PollingComponent, public LR1121Transport {
+class Halo2 : public PollingComponent {
  public:
   void setup() override;
   void update() override;
@@ -20,6 +19,7 @@ class Halo2 : public PollingComponent, public LR1121Transport {
   void dump_config() override;
   float get_setup_priority() const override { return setup_priority::LATE; }
 
+  LR1121Radio &get_radio() { return radio_; }
   void set_frequency_deviation(uint32_t value) { frequency_deviation_ = value; }
   void set_pulse_shape(uint8_t value) { pulse_shape_ = value; }
   void set_light(light::LightState *value, bool front) { (front ? front_light_ : back_light_) = value; }
@@ -84,7 +84,7 @@ class Halo2 : public PollingComponent, public LR1121Transport {
   bool auto_discover_{false};
   bool discovering_{false};
   enum class Transmission { NONE, COMMAND, STATUS };
-  lr1121_halo2::Radio<LR1121Transport> radio_{*this};
+  LR1121Radio radio_;
   uint8_t app_pid_{0};
   uint8_t last_pcf_{0};
   Transmission transmission_{Transmission::NONE};

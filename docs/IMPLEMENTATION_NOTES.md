@@ -9,10 +9,9 @@ The bridge follows the [ESPHome external-component layout](https://esphome.io/co
 | `__init__.py` | Configuration validation, entity creation, SPI registration, and GPIO code generation |
 | `halo2.h`, `halo2.cpp` | One shared lamp state, native entity adapters, command batching, status polling, preference storage, and discovery coordination |
 | `halo2_protocol.h` | Payloads, CRC, canonical/air-frame conversion, validation, and address extraction; independent of ESPHome and GPIO |
-| `lr1121_radio.h` | LR1121 command/packet handling over a templated transport |
-| `lr1121_transport.h` | ESPHome `SPIDevice`/GPIO transport |
+| `lr1121_radio.h` | LR1121 command/packet handling using ESPHome `SPIDevice` and GPIO |
 
-`Halo2` inherits the ESPHome SPI transport and owns its LR1121 command engine and packet sequence counter. The command engine remains independent of ESPHome through a templated transport. The component owns the HA-facing state; protocol encoding lives separately from hardware access.
+`Halo2` owns the HA-facing state, its LR1121 driver, and the packet sequence counter. The driver uses ESPHome's SPI and GPIO interfaces; protocol encoding remains separate from hardware access.
 
 ## HA state and radio commands
 
@@ -48,7 +47,7 @@ At boot, light preferences and the saved selection initialize the bridge without
 
 The driver advances up to four SPI transactions per ESPHome loop call. Reset pulse timing, startup, BUSY waits, calibration, TX completion, RX reads and rearming all use timed states. Individual SPI transfers remain synchronous and bounded to 32 bytes at 1 MHz; the only explicit delay is one microsecond for NSS-to-BUSY propagation. The component keeps its loop enabled to service the radio, checking commands and received frames every 50 ms. ESPHome's `PollingComponent` schedules periodic lamp status queries independently, while named scheduler timeouts handle recovery retries and discovery dwell periods.
 
-The transport registers with ESPHome's SPI bus and uses generated GPIO objects for CS, reset, BUSY and IRQ. Each transfer releases CS and the bus before waiting for the radio, allowing other SPI devices to share the bus. Radio recovery reuses the registered device without resetting or freeing the shared bus. ESPHome logs SPI transfer errors; the radio's response checks and BUSY/TX deadlines remain responsible for detecting failed operations because the SPI transfer API has no error return.
+The LR1121 driver registers with ESPHome's SPI bus and uses generated GPIO objects for CS, reset, BUSY and IRQ. Each transfer releases CS and the bus before waiting for the radio, allowing other SPI devices to share the bus. Radio recovery reuses the registered device without resetting or freeing the shared bus. ESPHome logs SPI transfer errors; the radio's response checks and BUSY/TX deadlines remain responsible for detecting failed operations because the SPI transfer API has no error return.
 
 Faults stop the current operation and schedule radio reinitialization with an exponential retry delay of 1–30 seconds. The bridge keeps Wi-Fi/API connectivity and its saved address, channel and packet options. Successful initialization resets the retry delay, restores passive reception or restarts an interrupted discovery, and schedules a fresh lamp-state query. In-flight and pending commands are dropped so recovery cannot replay stale actions. Failed initialization also retries instead of permanently marking the component failed.
 

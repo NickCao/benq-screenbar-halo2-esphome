@@ -245,7 +245,7 @@ void Halo2::loop() {
 
 void Halo2::dump_config() {
   ESP_LOGCONFIG(TAG, "ScreenBar HALO 2:");
-  LR1121Transport::dump_config();
+  radio_.dump_config();
   ESP_LOGCONFIG(TAG, "  Radio: LR1121, deviation: %" PRIu32 " Hz, pulse shape: 0x%02X",
                 frequency_deviation_, pulse_shape_);
   ESP_LOGCONFIG(TAG, "  Processing interval: %" PRIu32 " ms", processing_interval_);

@@ -19,7 +19,7 @@ AUTO_LOAD = ["button", "light", "switch", "text_sensor"]
 DEPENDENCIES = ["esp32", "spi"]
 
 halo2_ns = cg.esphome_ns.namespace("halo2")
-Halo2 = halo2_ns.class_("Halo2", cg.PollingComponent, spi.SPIDevice)
+Halo2 = halo2_ns.class_("Halo2", cg.PollingComponent)
 Halo2Light = halo2_ns.class_("Halo2Light", light.LightOutput)
 Halo2UltrasonicSwitch = halo2_ns.class_("Halo2UltrasonicSwitch", switch.Switch)
 Halo2DiscoverButton = halo2_ns.class_("Halo2DiscoverButton", button.Button)
@@ -116,10 +116,11 @@ async def to_code(config):
     await cg.register_component(
         var, {**config, CONF_UPDATE_INTERVAL: config["status_poll_interval"]}
     )
-    await spi.register_spi_device(var, config)
-    cg.add(var.set_reset_pin(await cg.gpio_pin_expression(config[CONF_RESET_PIN])))
-    cg.add(var.set_busy_pin(await cg.gpio_pin_expression(config[CONF_BUSY_PIN])))
-    cg.add(var.set_irq_pin(await cg.gpio_pin_expression(config[CONF_IRQ_PIN])))
+    radio = var.get_radio()
+    await spi.register_spi_device(radio, config)
+    cg.add(radio.set_reset_pin(await cg.gpio_pin_expression(config[CONF_RESET_PIN])))
+    cg.add(radio.set_busy_pin(await cg.gpio_pin_expression(config[CONF_BUSY_PIN])))
+    cg.add(radio.set_irq_pin(await cg.gpio_pin_expression(config[CONF_IRQ_PIN])))
     cg.add(var.set_command_debounce(config["command_debounce"]))
     cg.add(var.set_frequency_deviation(config["frequency_deviation_hz"]))
     cg.add(var.set_pulse_shape(config["pulse_shape"]))

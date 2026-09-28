@@ -4,14 +4,29 @@
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
+#include "esphome/components/spi/spi.h"
+#include "esphome/core/gpio.h"
+#include "esphome/core/hal.h"
+#include "esp_timer.h"
 #include "halo2_protocol.h"
 
-namespace lr1121_halo2 {
+namespace esphome::halo2 {
 // LR1121 User Manual rev. 1.2, sections 3, 4, 6, 7 and 8.5.
 // Reset, BUSY and TX completion advance across loop calls without sleeping.
-template<class Transport> class Radio {
+class LR1121Radio : public spi::SPIDevice<spi::BIT_ORDER_MSB_FIRST, spi::CLOCK_POLARITY_LOW,
+                                         spi::CLOCK_PHASE_LEADING, spi::DATA_RATE_1MHZ> {
  public:
-  explicit Radio(Transport &transport) : transport_(transport) {}
+  void set_reset_pin(InternalGPIOPin *pin) { reset_pin_ = pin; }
+  void set_busy_pin(InternalGPIOPin *pin) { busy_pin_ = pin; }
+  void set_irq_pin(InternalGPIOPin *pin) { irq_pin_ = pin; }
+
+  void dump_config() {
+    static const char *const TAG = "halo2";
+    LOG_SPI_DEVICE(this);
+    LOG_PIN("  Reset Pin: ", reset_pin_);
+    LOG_PIN("  Busy Pin: ", busy_pin_);
+    LOG_PIN("  IRQ Pin: ", irq_pin_);
+  }
 
   bool ready() const { return ready_; }
   bool idle() const { return operation_ == Operation::IDLE; }
@@ -50,8 +65,21 @@ template<class Transport> class Radio {
     if (deviation_hz == 0 || deviation_hz >= 171000 ||
         (pulse_shape != 0 && (pulse_shape < 0x08 || pulse_shape > 0x0B)))
       return fail_("invalid modulation settings");
-    if (!transport_.begin()) return fail_("SPI/GPIO initialization failed");
-    if (!transport_.set_reset(false)) return fail_("reset GPIO failed");
+    if (parent_->is_failed()) return fail_("SPI bus unavailable");
+    // Recovery resets the radio while retaining the registered SPI device.
+    if (!registered_) {
+      busy_pin_->setup();
+      irq_pin_->setup();
+      reset_pin_->digital_write(true);
+      reset_pin_->setup();
+      spi_setup();
+      if (!release_device_ && !spi_is_ready()) {
+        spi_teardown();
+        return fail_("SPI initialization failed");
+      }
+      registered_ = true;
+    }
+    reset_pin_->digital_write(false);
     begin_(Operation::RESET_LOW);
     read_(0x0101, {}, 4, Response::VERSION);
 
@@ -169,7 +197,10 @@ template<class Transport> class Radio {
     Response response{Response::NONE};
   };
 
-  Transport &transport_;
+  InternalGPIOPin *reset_pin_{nullptr};
+  InternalGPIOPin *busy_pin_{nullptr};
+  InternalGPIOPin *irq_pin_{nullptr};
+  bool registered_{false};
   Operation operation_{Operation::FAILED};
   std::array<Job, 24> jobs_{};
   size_t job_count_{0}, job_index_{0};
@@ -204,7 +235,7 @@ template<class Transport> class Radio {
     job_count_ = job_index_ = 0;
     response_phase_ = false;
     irq_waiting_ = false;
-    phase_started_ = transport_.now_us();
+    phase_started_ = esp_timer_get_time();
     rx_pending_ = false;
     needs_receive_ = false;
   }
@@ -264,20 +295,32 @@ template<class Transport> class Radio {
     return true;
   }
   bool bus_ready_(uint32_t timeout_us = 20000) {
-    if (!transport_.busy()) return true;
-    if (transport_.now_us() - phase_started_ >= timeout_us) fail_("BUSY timeout");
+    if (!busy_pin_->digital_read()) return true;
+    if (esp_timer_get_time() - phase_started_ >= timeout_us) fail_("BUSY timeout");
     return false;
   }
   bool transfer_(const uint8_t *tx, uint8_t *rx, size_t size) {
-    if (!transport_.transfer(tx, rx, size)) return fail_("SPI transfer failed");
-    // NSS-to-BUSY propagation, not a wait for completion of a radio operation.
-    transport_.delay_us(1);
+    enable();
+    if (!spi_is_ready()) {
+      disable();
+      return fail_("SPI device unavailable");
+    }
+    if (rx != nullptr) {
+      // Read buffers contain zero dummy bytes; exchange them in place.
+      transfer_array(rx, size);
+    } else {
+      write_array(tx, size);
+    }
+    // Release CS and the bus, then allow NSS-to-BUSY propagation.
+    disable();
+    delayMicroseconds(1);
+    // SPI errors are logged by ESPHome; response checks and BUSY/TX deadlines
+    // detect radio failures because the SPI API has no transfer result.
     return true;
   }
   bool irq_() {
-    const uint8_t tx[6]{};
     uint8_t rx[6]{};
-    if (!transfer_(tx, rx, sizeof(rx))) return false;
+    if (!transfer_(nullptr, rx, sizeof(rx))) return false;
     const uint8_t status = (rx[0] >> 1U) & 7U;
     if (status != 2 && status != 3) return fail_("command rejected");
     last_irq_ = (uint32_t(rx[2]) << 24U) | (uint32_t(rx[3]) << 16U) | (uint32_t(rx[4]) << 8U) | rx[5];
@@ -316,16 +359,16 @@ template<class Transport> class Radio {
   bool advance_() {
     if (operation_ == Operation::FAILED) return false;
     if (operation_ == Operation::RESET_LOW) {
-      if (transport_.now_us() - phase_started_ < 1000) return false;
-      if (!transport_.set_reset(true)) return fail_("reset GPIO failed");
+      if (esp_timer_get_time() - phase_started_ < 1000) return false;
+      reset_pin_->digital_write(true);
       operation_ = Operation::RESET_WAIT;
-      phase_started_ = transport_.now_us();
+      phase_started_ = esp_timer_get_time();
       return false;
     }
     if (operation_ == Operation::RESET_WAIT) {
-      if (transport_.now_us() - phase_started_ < 10000 || !bus_ready_(500000)) return false;
+      if (esp_timer_get_time() - phase_started_ < 10000 || !bus_ready_(500000)) return false;
       operation_ = Operation::INITIALIZE;
-      phase_started_ = transport_.now_us();
+      phase_started_ = esp_timer_get_time();
     }
     if (operation_ == Operation::IDLE || operation_ == Operation::WAIT_TX) {
       if (rx_pending_) return false;
@@ -334,15 +377,15 @@ template<class Transport> class Radio {
         receive_commands_();
         return true;
       }
-      if (!transport_.irq()) {
+      if (!irq_pin_->digital_read()) {
         irq_waiting_ = false;
-        if (operation_ == Operation::WAIT_TX && transport_.now_us() - tx_started_ >= 50000)
+        if (operation_ == Operation::WAIT_TX && esp_timer_get_time() - tx_started_ >= 50000)
           fail_("TX completion timeout");
         return false;
       }
       if (!irq_waiting_) {
         irq_waiting_ = true;
-        phase_started_ = transport_.now_us();
+        phase_started_ = esp_timer_get_time();
       }
       if (!bus_ready_() || !irq_()) return false;
       irq_waiting_ = false;
@@ -358,7 +401,7 @@ template<class Transport> class Radio {
           tx_completed_ = true;
           operation_ = Operation::IDLE;
         } else {
-          if ((last_irq_ & IRQ_TIMEOUT) || transport_.now_us() - tx_started_ >= 50000)
+          if ((last_irq_ & IRQ_TIMEOUT) || esp_timer_get_time() - tx_started_ >= 50000)
             fail_("TX completion timeout");
           return false;
         }
@@ -380,15 +423,14 @@ template<class Transport> class Radio {
     if (!bus_ready_(response_phase_ ? job.timeout_us : 20000)) return false;
     if (!response_phase_) {
       if (!transfer_(job.bytes.data(), nullptr, job.size)) return false;
-      if (job.bytes[0] == 0x02 && job.bytes[1] == 0x0A) tx_started_ = transport_.now_us();
+      if (job.bytes[0] == 0x02 && job.bytes[1] == 0x0A) tx_started_ = esp_timer_get_time();
       response_phase_ = true;
-      phase_started_ = transport_.now_us();
+      phase_started_ = esp_timer_get_time();
       return true;
     }
     if (job.read_size) {
-      const uint8_t tx[32]{};
       uint8_t rx[32]{};
-      if (!transfer_(tx, rx, job.read_size + 1)) return false;
+      if (!transfer_(nullptr, rx, job.read_size + 1)) return false;
       if (((rx[0] >> 1U) & 7U) != 3) return fail_("read command rejected");
       if (!response_(job.response, rx + 1)) return false;
     } else {
@@ -397,7 +439,7 @@ template<class Transport> class Radio {
         return fail_("command error", (uint16_t(job.bytes[0]) << 8U) | job.bytes[1]);
     }
     response_phase_ = false;
-    phase_started_ = transport_.now_us();
+    phase_started_ = esp_timer_get_time();
     if (++job_index_ == job_count_) {
       if (operation_ == Operation::TRANSMIT) {
         operation_ = Operation::WAIT_TX;
@@ -409,4 +451,4 @@ template<class Transport> class Radio {
     return true;
   }
 };
-}  // namespace lr1121_halo2
+}  // namespace esphome::halo2
