@@ -61,6 +61,7 @@ class Halo2 : public PollingComponent {
   bool scan_channel_();
   void process_radio_();
   void schedule_status_poll_(uint32_t delay);
+  void cancel_status_poll_();
   void start_radio_();
   void recover_radio_();
   bool send_state_(uint8_t command, bool auto_brightness = false);

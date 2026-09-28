@@ -96,9 +96,7 @@ void Halo2::recover_radio_() {
   // Never replay an interrupted command batch after reconnecting to the lamp.
   pending_command_ = NO_PENDING_COMMAND;
   pending_auto_brightness_ = false;
-  awaiting_status_ = false;
-  status_followup_ = false;
-  status_poll_pending_ = false;
+  cancel_status_poll_();
   cancel_timeout("discovery_dwell");
   state_.valid = false;
   status_set_warning();
@@ -124,9 +122,7 @@ void Halo2::start_discovery() {
   if (!ready_) return;
   pending_command_ = NO_PENDING_COMMAND;
   pending_auto_brightness_ = false;
-  awaiting_status_ = false;
-  status_followup_ = false;
-  status_poll_pending_ = false;
+  cancel_status_poll_();
   cancel_timeout("discovery_dwell");
   candidates_ = {};
   scan_step_ = 0;
@@ -419,6 +415,12 @@ void Halo2::schedule_status_poll_(uint32_t delay) {
   next_status_poll_ = millis() + delay;
 }
 
+void Halo2::cancel_status_poll_() {
+  status_poll_pending_ = false;
+  awaiting_status_ = false;
+  status_followup_ = false;
+}
+
 void Halo2::process_radio_() {
   if (!ready_ || discovering_) return;
   if (transmission_ != Transmission::NONE) return;
@@ -434,9 +436,7 @@ void Halo2::process_radio_() {
     pending_command_ = NO_PENDING_COMMAND;
     pending_auto_brightness_ = false;
     // A reply to an earlier query must not overwrite a newer local command.
-    status_poll_pending_ = false;
-    awaiting_status_ = false;
-    status_followup_ = false;
+    cancel_status_poll_();
     const auto send = [&](uint8_t opcode) {
       ESP_LOGD(TAG, "TX command 0x%02X, power %s, mode %u/%u", opcode, ONOFF(state_.power), state_.front, state_.back);
       return send_state_(opcode, auto_brightness && opcode == Command::SETTINGS);

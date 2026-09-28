@@ -107,12 +107,7 @@ class LR1121Radio : public spi::SPIDevice<spi::BIT_ORDER_MSB_FIRST, spi::CLOCK_P
            {byte_(BITRATE_BPS, 24), byte_(BITRATE_BPS, 16), byte_(BITRATE_BPS, 8), byte_(BITRATE_BPS, 0), pulse_shape,
             RX_BANDWIDTH_467_KHZ, byte_(deviation_hz, 24), byte_(deviation_hz, 16), byte_(deviation_hz, 8),
             byte_(deviation_hz, 0)});
-    // 32-bit TX preamble and address sync; no RX preamble gate so short lamp
-    // ACKs survive turnaround. Software handles the 9-bit PCF and CRC.
-    // No whitening, hardware CRC, length byte, address filter, or auto-ACK.
-    const auto air = halo2_protocol::air_address(address_);
-    write_(Opcode::SET_PACKET_PARAMS, {0x00, 0x20, 0x00, 0x20, 0x00, 0x00, halo2_protocol::AIR_FRAME_SIZE, 0x01, 0x00});
-    write_(Opcode::SET_GFSK_SYNC_WORD, {air[0], air[1], air[2], air[3], 0, 0, 0, 0});
+    packet_commands_(address_);
     write_(Opcode::SET_PA_CONFIG, {0x02, 0x00, 0x04, 0x00});  // HF PA, VREG, Waveshare duty cycle
     write_(Opcode::SET_TX_PARAMS, {0x00, 0x02});              // 0 dBm, 48 us ramp
     write_(Opcode::SET_RX_TX_FALLBACK_MODE, {0x01});          // fall back to STBY_RC
@@ -180,11 +175,9 @@ class LR1121Radio : public spi::SPIDevice<spi::BIT_ORDER_MSB_FIRST, spi::CLOCK_P
 
   bool use_address(const halo2_protocol::Address &address, uint8_t channel) {
     if (!ready_ || !idle()) return false;
-    const auto air = halo2_protocol::air_address(address);
     begin_(Operation::CONFIGURE);
     frequency_commands_(channel);
-    write_(Opcode::SET_PACKET_PARAMS, {0x00, 0x20, 0x00, 0x20, 0x00, 0x00, halo2_protocol::AIR_FRAME_SIZE, 0x01, 0x00});
-    write_(Opcode::SET_GFSK_SYNC_WORD, {air[0], air[1], air[2], air[3], 0, 0, 0, 0});
+    packet_commands_(address);
     receive_commands_();
     address_ = address;
     discovering_ = false;
@@ -322,6 +315,14 @@ class LR1121Radio : public spi::SPIDevice<spi::BIT_ORDER_MSB_FIRST, spi::CLOCK_P
     write_(Opcode::SET_STANDBY, {0x00});
     write_(Opcode::SET_RF_FREQUENCY,
            {byte_(frequency, 24), byte_(frequency, 16), byte_(frequency, 8), byte_(frequency, 0)});
+  }
+  void packet_commands_(const halo2_protocol::Address &address) {
+    // 32-bit TX preamble and address sync; no RX preamble gate so short lamp
+    // ACKs survive turnaround. Software handles the 9-bit PCF and CRC.
+    // No whitening, hardware CRC, length byte, address filter, or auto-ACK.
+    const auto air = halo2_protocol::air_address(address);
+    write_(Opcode::SET_PACKET_PARAMS, {0x00, 0x20, 0x00, 0x20, 0x00, 0x00, halo2_protocol::AIR_FRAME_SIZE, 0x01, 0x00});
+    write_(Opcode::SET_GFSK_SYNC_WORD, {air[0], air[1], air[2], air[3], 0, 0, 0, 0});
   }
   void receive_commands_() {
     // AutoTxRx is bidirectional. Disable it BEFORE SetRx: overhearing the
