@@ -22,8 +22,8 @@ views:
           - type: light-color-temp
 
       - type: tile
-        entity: switch.benq_screenbar_halo_2_ultrasonic_sensor
+        entity: select.benq_screenbar_halo_2_ultrasonic_sensor
         name: Automatic presence mode
         icon: mdi:motion-sensor
         tap_action:
-          action: toggle
+          action: more-info

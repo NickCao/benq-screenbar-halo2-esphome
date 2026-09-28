@@ -41,7 +41,7 @@ The schema is defined in [`components/halo2/__init__.py`](../components/halo2/__
 | `reset_pin`, `busy_pin`, `irq_pin` | Required internal GPIO pins: reset output, BUSY input, and IRQ input |
 | `data_rate`, `spi_mode` | Fixed to the validated `1MHz` and `MODE0`, also used as defaults |
 | `front_light`, `back_light` | Required native light configurations; separate brightness and shared color temperature |
-| `ultrasonic` | Required switch enabling the lamp's presence mode; not an occupancy sensor |
+| `ultrasonic` | Required select: Disabled, 3 minutes, 5 minutes, 10 minutes, or 15 minutes; a duration enables presence detection with that inactivity timeout |
 | `auto_button` | Optional button activating the lamp's automatic brightness adjustment; included in the common package |
 | `radio_status` | Required diagnostic text sensor |
 | `update_interval` | Receive-buffer checks and pending-command processing interval; default `50ms` |
@@ -76,11 +76,13 @@ The component currently supports one radio/bridge instance per device. LR1121 wi
 
 Both lights use zero-length transitions by default and `gamma_correct: 1.0`; other gamma values are rejected because the lamp already accepts brightness percentages. Their restore mode is `RESTORE_DEFAULT_OFF`.
 
-The common package provides initial brightness values of 12% front / 91% back and a shared 3925 K temperature. These are initial defaults, not address-discovery requirements. Saved light preferences take precedence on later boots. Initialization restores the bridge's last known state without sending settings or power commands. LR1121 then queries the lamp to obtain its actual state.
+The common package provides initial brightness values of 12% front / 91% back and a shared 3925 K temperature. These are initial defaults, not address-discovery requirements. Saved light preferences take precedence on later boots. Initialization restores the bridge's last known light state without sending settings or power commands. LR1121 then queries the lamp. Local controls are accepted after the first valid lamp/controller state, so an uninitialized presence setting cannot accidentally disable the sensor.
 
-The hardware temperature range is 2700–6500 K in 25 K steps. A change through either light is mirrored to the other. Brightness is 1–100% when lit; zero brightness is treated as off. Last useful brightness is retained when turning a section off.
+The bridge sends color temperatures from 2700–6500 K in 25 K steps. A change through either light is mirrored to the other. Brightness is 1–100% when lit; zero brightness is treated as off. Last useful brightness is retained when turning a section off.
 
-There is no `power:` option or master Power switch. The front/back light states determine global power and the selected lighting mode. The ultrasonic switch displays a normal toggle using the last commanded or received value. LR1121 polling updates that value from the lamp as well.
+There is no `power:` option or master Power switch. The front/back light states determine global power and the selected lighting mode.
+
+The **Ultrasonic sensor** dropdown combines sensor enable and inactivity timeout into one control. Disabled turns off presence detection while retaining the lamp's timeout; choosing 3, 5, 10, or 15 minutes enables detection with that duration. The timer runs in the lamp. Polling and accepted controller snapshots update the dropdown; it does not report occupancy. On the wire, timeout value zero means three minutes, and disabling uses a separate bit; see the [protocol reference](PROTOCOL.md#ultrasonic-timeout).
 
 Press **Auto brightness** with the lamp on to activate its automatic adjustment. It is a button, not a separate on/off entity. Ordinary manual brightness commands resume manual control. On LR1121, the resulting brightness and temperature are read back through status polling.
 
@@ -95,7 +97,7 @@ halo2:
   radio_channel: 5
 ```
 
-The address is in **register order**, the same order shown by **Radio address**. Its bytes are reversed for the on-air address. Operate the original controller after configuration so the bridge can learn the current settings and the packet-option byte used by the lamp.
+The address is in **register order**, the same order shown by **Radio address**. Its bytes are reversed for the on-air address. With the correct address and channel, polling reads the current settings, including presence enable and timeout; accepted controller traffic can also supply them.
 
 An explicit address takes precedence over preferences at boot. Remove `radio_address` and allow discovery if you want a newly learned link to be reused automatically. With `auto_discover: false` and no explicit or saved link, the implementation falls back to its compile-time reference address; that is not a universal lamp address.
 
@@ -121,6 +123,8 @@ For a combined control, create a Light group helper containing Front lamp and Ba
 ## Updating older installations
 
 Keep the device and light names to retain their HA identities. HA refreshes the native API entity list on reconnect. Remove manually configured dashboard cards or automations that reference the retired master Power switch or old REST helpers.
+
+The ultrasonic entity is now a select instead of a switch. Update dashboard and automation references from `switch.…_ultrasonic_sensor` to `select.…_ultrasonic_sensor`, using one of the five option names above. The previous switch may remain as an unavailable entity in HA and can be removed. Customized `ultrasonic:` configurations must remove switch-only options such as `restore_mode` or `inverted`.
 
 The radio headers live under `components/halo2/`; remove old `esphome.includes` entries from customized configurations and copy the complete component directory. The Waveshare profile remains `screenbar-halo2-lr1121.yaml`.
 

@@ -65,7 +65,7 @@ The saved link is reused after reboot. Use **Discover lamp address** to learn an
 | Front lamp | Front on/off, brightness, and shared color temperature |
 | Back lamp | Back on/off, brightness, and shared color temperature |
 | Auto brightness | Activates the lamp's automatic brightness adjustment |
-| Ultrasonic sensor | Normal toggle for the lamp's automatic presence mode; it does not report occupancy |
+| Ultrasonic sensor | Select Disabled, or enable presence detection with a 3-, 5-, 10-, or 15-minute inactivity timeout; it does not report occupancy |
 | Radio status | Initialization, discovery, controller reception, lamp polling, and command/error status |
 | Radio address | Learned/configured address and frequency |
 | Discover lamp address | Starts a new passive scan |
@@ -74,9 +74,9 @@ The saved link is reused after reboot. Use **Discover lamp address** to learn an
 
 There is no separate master Power entity. Turning off the last active section sends the lamp's global OFF command; turning either section on from fully off applies the settings and sends global ON.
 
-The first command is sent without a debounce delay. For one second after a command batch finishes, further changes are combined into a single final update. HA reflects requests immediately. Set `halo2.command_debounce` to adjust this interval.
+The first command is sent without a debounce delay. For one second after a command batch finishes, further changes are combined into the latest requested state. Each required power, settings, or timeout command is retained and sent in order. HA reflects requests immediately once the bridge has received its first valid lamp/controller state. Set `halo2.command_debounce` to adjust this interval.
 
-Brightness is independent for each section. Color temperature is shared by the lamp, so changing it on either entity updates both. The range is 2700–6500 K in 25 K steps. [BenQ user guide, English page 5](https://esupportdownload.benq.com/esupport/E-READING%20LAMP/UserManual/ScreenBar%20Halo%202/ScreenBar%20Halo%202_UM_DE_EN_ES_FR_IT_JA_NL_SV_ZH-TW_250627174322.pdf)
+Brightness is independent for each section. Color temperature is shared between the two light entities, so changing it on either entity updates both. The bridge sends temperatures from 2700–6500 K in 25 K steps. See the [protocol reference](docs/PROTOCOL.md#application-payload) for the two temperature fields and the remaining uncertainty about unequal values, or the [BenQ user guide](https://www.benq.com/en-us/support/downloads-faq/products/lighting/screenbar-halo-2/manual.html) for controller operation.
 
 HA's normal “all lights” controls operate both sections. For one dedicated ScreenBar control, optionally create an HA **Light group** containing Front lamp and Back lamp. Its default state is on if either member is on; group ON turns both sections on. The group is configured in HA, not created by this firmware. [HA light groups](https://www.home-assistant.io/integrations/group/)
 
@@ -119,7 +119,8 @@ Upload updates and view logs with:
 | [`home-assistant/dashboard.yaml`](home-assistant/dashboard.yaml) | Optional HA dashboard |
 | [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | Component options, manual addressing, and dashboard setup |
 | [`docs/WIRING.md`](docs/WIRING.md) | Waveshare antennas and pins |
-| [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) | State handling, discovery, and radio frame formats |
+| [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | Radio framing, CRC, commands, capture evidence, and remaining unknowns |
+| [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) | ESPHome state handling, scheduling, polling, and discovery |
 | [`.github/workflows/validate.yml`](.github/workflows/validate.yml) | Podman compilation of the Waveshare firmware |
 
 All C++ sources needed by `halo2` live in its component directory and are copied by ESPHome automatically. The board YAML does not need `esphome.includes`. This follows ESPHome's [external-component layout](https://esphome.io/components/external_components/).
