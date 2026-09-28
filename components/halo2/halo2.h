@@ -2,6 +2,7 @@
 
 #include <bitset>
 #include "esphome/core/component.h"
+#include "esphome/core/helpers.h"
 #include "esphome/core/preferences.h"
 #include "esphome/components/button/button.h"
 #include "esphome/components/light/light_output.h"
@@ -127,9 +128,9 @@ class Halo2 : public PollingComponent {
   bool publishing_{false};
 };
 
-class Halo2Light : public light::LightOutput {
+class Halo2Light : public light::LightOutput, public Parented<Halo2> {
  public:
-  Halo2Light(Halo2 *parent, bool front) : parent_(parent), front_(front) {}
+  Halo2Light(Halo2 *parent, bool front) : Parented<Halo2>(parent), front_(front) {}
   light::LightTraits get_traits() override;
   void setup_state(light::LightState *state) override { parent_->set_light(state, front_); }
   void update_state(light::LightState *state) override {
@@ -146,36 +147,32 @@ class Halo2Light : public light::LightOutput {
   }
 
  protected:
-  Halo2 *parent_;
   bool front_;
   bool forward_update_{false};
 };
 
-class Halo2UltrasonicSelect : public select::Select {
+class Halo2UltrasonicSelect : public select::Select, public Parented<Halo2> {
  public:
-  explicit Halo2UltrasonicSelect(Halo2 *parent) : parent_(parent) {}
+  using Parented<Halo2>::Parented;
 
  protected:
   void control(size_t index) override { parent_->control_ultrasonic(index); }
-  Halo2 *parent_;
 };
 
-class Halo2DiscoverButton : public button::Button {
+class Halo2DiscoverButton : public button::Button, public Parented<Halo2> {
  public:
-  explicit Halo2DiscoverButton(Halo2 *parent) : parent_(parent) {}
+  using Parented<Halo2>::Parented;
 
  protected:
   void press_action() override { parent_->start_discovery(); }
-  Halo2 *parent_;
 };
 
-class Halo2AutoButton : public button::Button {
+class Halo2AutoButton : public button::Button, public Parented<Halo2> {
  public:
-  explicit Halo2AutoButton(Halo2 *parent) : parent_(parent) {}
+  using Parented<Halo2>::Parented;
 
  protected:
   void press_action() override { parent_->start_auto_brightness(); }
-  Halo2 *parent_;
 };
 
 }  // namespace esphome::halo2
