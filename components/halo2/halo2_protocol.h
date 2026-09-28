@@ -77,19 +77,13 @@ constexpr Address air_address(const Address &address = RADIO_ADDRESS) {
 }
 
 inline uint16_t halo_crc(uint8_t pcf, const Payload &payload, const Address &address = RADIO_ADDRESS) {
-  uint16_t crc = CRC_INITIAL;
-  auto feed = [&](uint8_t byte) {
-    crc ^= static_cast<uint16_t>(byte) << 8U;
-    for (int i = 0; i < 8; ++i)
-      crc =
-          (crc & CRC_TOP_BIT) ? static_cast<uint16_t>((crc << 1U) ^ CRC_POLYNOMIAL) : static_cast<uint16_t>(crc << 1U);
-  };
-  for (uint8_t byte : air_address(address)) feed(byte);
+  const auto address_bytes = air_address(address);
+  uint16_t crc = esphome::crc16be(address_bytes.data(), address_bytes.size(), CRC_INITIAL, CRC_POLYNOMIAL);
   // The leading PCF bit is zero for a ten-byte payload and participates in CRC.
   crc = (crc & CRC_TOP_BIT) ? static_cast<uint16_t>((crc << 1U) ^ CRC_POLYNOMIAL) : static_cast<uint16_t>(crc << 1U);
-  feed(pcf);
-  for (uint8_t byte : esphome::bit_cast<std::array<uint8_t, PAYLOAD_SIZE>>(payload)) feed(byte);
-  return crc;
+  crc = esphome::crc16be(&pcf, sizeof(pcf), crc, CRC_POLYNOMIAL);
+  const auto payload_bytes = esphome::bit_cast<std::array<uint8_t, PAYLOAD_SIZE>>(payload);
+  return esphome::crc16be(payload_bytes.data(), payload_bytes.size(), crc, CRC_POLYNOMIAL);
 }
 
 inline Payload make_payload(uint8_t command, const HaloRxState &state, bool auto_brightness = false) {
