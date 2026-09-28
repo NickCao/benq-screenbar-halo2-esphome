@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
+#include "esphome/core/application.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 
@@ -80,6 +81,8 @@ void Halo2::recover_radio_() {
   pending_auto_brightness_ = false;
   awaiting_status_ = false;
   status_followup_ = false;
+  status_poll_pending_ = false;
+  cancel_timeout("discovery_dwell");
   state_.valid = false;
   status_set_warning();
   const char *error = radio_.last_error();
@@ -88,7 +91,7 @@ void Halo2::recover_radio_() {
   snprintf(status, sizeof(status), "%s; retrying in %" PRIu32 " s", error, recovery_delay_ / 1000);
   publish_status_(status);
   ESP_LOGW(TAG, "%s", status);
-  recovery_at_ = millis() + recovery_delay_;
+  set_timeout("radio_recovery", recovery_delay_, [this]() { start_radio_(); });
   recovery_delay_ = std::min(recovery_delay_ * 2, uint32_t{30000});
 }
 
@@ -106,6 +109,8 @@ void Halo2::start_discovery() {
   pending_auto_brightness_ = false;
   awaiting_status_ = false;
   status_followup_ = false;
+  status_poll_pending_ = false;
+  cancel_timeout("discovery_dwell");
   candidates_ = {};
   scan_step_ = 0;
   discovering_ = true;
@@ -121,7 +126,8 @@ bool Halo2::scan_channel_() {
     recover_radio_();
     return false;
   }
-  scan_started_ = millis();
+  scan_expired_ = false;
+  set_timeout("discovery_dwell", 3000, [this]() { scan_expired_ = true; });
   char status[80];
   snprintf(status, sizeof(status), "Discovering at %u MHz; adjust controller brightness", 2400U + channel);
   publish_status_(status);
@@ -130,10 +136,7 @@ bool Halo2::scan_channel_() {
 }
 
 void Halo2::loop() {
-  if (recovering_) {
-    if (static_cast<int32_t>(millis() - recovery_at_) >= 0) start_radio_();
-    return;
-  }
+  if (recovering_) return;
   radio_.loop();
   if (radio_.last_error() != nullptr) {
     recover_radio_();
@@ -153,7 +156,7 @@ void Halo2::loop() {
       publish_address_();
       publish_status_("Listening");
       // Read the lamp after recovery instead of imposing the saved HA state.
-      next_status_poll_ = millis() + 500;
+      schedule_status_poll_(500);
     }
   }
   if (radio_.take_tx_done()) {
@@ -164,11 +167,20 @@ void Halo2::loop() {
       command_sent_ = true;
       status_clear_warning();
       publish_status_("Command sent");
-      next_status_poll_ = millis() + 500;
+      schedule_status_poll_(500);
     }
     transmission_ = Transmission::NONE;
   }
-  if (!discovering_ || !radio_.idle()) return;
+  if (!discovering_) {
+    // Keep fast command/RX processing separate from periodic lamp polling.
+    const uint32_t now = App.get_loop_component_start_time();
+    if (now - last_process_at_ >= processing_interval_) {
+      last_process_at_ = now;
+      process_radio_();
+    }
+    return;
+  }
+  if (!radio_.idle()) return;
   if (scan_pending_) {
     if (scan_channel_()) scan_pending_ = false;
     return;
@@ -208,10 +220,11 @@ void Halo2::loop() {
       radio_address_ = address;
       radio_channel_ = channel;
       discovering_ = false;
+      cancel_timeout("discovery_dwell");
       const SavedLink saved{address, channel, 2, received.packet_options, 0};
       const bool persisted = link_preference_.save(&saved) && global_preferences->sync();
       state_ = received;
-      next_status_poll_ = millis() + 1000;
+      schedule_status_poll_(1000);
       save_mode_();
       publish_lights_();
       ultrasonic_switch_->publish_state(state_.pir);
@@ -223,7 +236,7 @@ void Halo2::loop() {
       return;
     }
   }
-  if (millis() - scan_started_ >= 3000) {
+  if (scan_expired_) {
     ESP_LOGD(TAG, "Discovery captured %" PRIu32 " buffers", radio_.capture_count());
     scan_step_ = (scan_step_ + 1) % 6;
     scan_pending_ = true;
@@ -235,7 +248,7 @@ void Halo2::dump_config() {
   LR1121Transport::dump_config();
   ESP_LOGCONFIG(TAG, "  Radio: LR1121, deviation: %" PRIu32 " Hz, pulse shape: 0x%02X",
                 frequency_deviation_, pulse_shape_);
-  ESP_LOGCONFIG(TAG, "  Lamp status interval: %" PRIu32 " ms", status_poll_interval_);
+  ESP_LOGCONFIG(TAG, "  Processing interval: %" PRIu32 " ms", processing_interval_);
   ESP_LOGCONFIG(TAG, "  Frequency: %u MHz", 2400U + radio_channel_);
   ESP_LOGCONFIG(TAG, "  Command debounce: %" PRIu32 " ms", command_debounce_);
   LOG_UPDATE_INTERVAL(this);
@@ -377,6 +390,16 @@ void Halo2::apply_received_(const halo2_protocol::HaloRxState &received) {
 }
 
 void Halo2::update() {
+  if (ready_ && !discovering_ && pending_command_ == 0 && transmission_ == Transmission::NONE &&
+      !status_poll_pending_ && !awaiting_status_ && !status_followup_) schedule_status_poll_(0);
+}
+
+void Halo2::schedule_status_poll_(uint32_t delay) {
+  status_poll_pending_ = true;
+  next_status_poll_ = millis() + delay;
+}
+
+void Halo2::process_radio_() {
   if (!ready_ || discovering_) return;
   if (transmission_ != Transmission::NONE) return;
   if (pending_command_ != 0) {
@@ -391,6 +414,7 @@ void Halo2::update() {
     pending_command_ = 0;
     pending_auto_brightness_ = false;
     // A reply to an earlier query must not overwrite a newer local command.
+    status_poll_pending_ = false;
     awaiting_status_ = false;
     status_followup_ = false;
     const auto send = [&](uint8_t opcode) {
@@ -422,7 +446,7 @@ void Halo2::update() {
       awaiting_status_ = false;
       status_followup_ = false;
       apply_received_(received);
-      next_status_poll_ = millis() + 500;
+      schedule_status_poll_(500);
     } else if (awaiting_status_ && (received.pcf & 0x06U) == (status_request_pcf_ & 0x06U)) {
       if (!status_followup_ || (received.command != 0x04 && status_read_attempts_ < 3)) {
         // The first ACK confirms delivery, but its payload was queued before
@@ -430,7 +454,7 @@ void Halo2::update() {
         // Drain any additional queued command ACKs with bounded read retries.
         awaiting_status_ = false;
         status_followup_ = true;
-        next_status_poll_ = millis() + 500;
+        schedule_status_poll_(500);
       } else if (received.command == 0x04) {
         awaiting_status_ = false;
         status_followup_ = false;
@@ -460,17 +484,16 @@ void Halo2::update() {
       publish_status_("Lamp status unavailable; retaining last known state");
     }
   }
-  if (awaiting_status_ || static_cast<int32_t>(now - next_status_poll_) < 0 ||
+  if (!status_poll_pending_ || awaiting_status_ || static_cast<int32_t>(now - next_status_poll_) < 0 ||
       front_light_->is_transformer_active() || back_light_->is_transformer_active() ||
       !radio_.idle()) return;
   const bool followup = status_followup_;
   if (followup) {
     ++status_read_attempts_;
   } else {
-    status_poll_started_ = now;
     status_read_attempts_ = 0;
   }
-  next_status_poll_ = status_poll_started_ + status_poll_interval_;
+  status_poll_pending_ = false;
   ESP_LOGD(TAG, "%s lamp status", followup ? "Reading" : "Refreshing");
   if (send_state_(0x04)) {
     awaiting_status_ = true;

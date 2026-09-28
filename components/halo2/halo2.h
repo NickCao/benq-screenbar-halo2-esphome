@@ -29,7 +29,7 @@ class Halo2 : public PollingComponent, public LR1121Transport {
   void set_auto_discover(bool value) { auto_discover_ = value; }
   void set_radio_address(const halo2_protocol::Address &value) { radio_address_ = value; address_configured_ = true; }
   void set_radio_channel(uint8_t value) { radio_channel_ = value; }
-  void set_status_poll_interval(uint32_t value) { status_poll_interval_ = value; }
+  void set_processing_interval(uint32_t value) { processing_interval_ = value; }
   void set_command_debounce(uint32_t value) { command_debounce_ = value; }
   void start_discovery();
   void start_auto_brightness();
@@ -49,6 +49,8 @@ class Halo2 : public PollingComponent, public LR1121Transport {
   void apply_received_(const halo2_protocol::HaloRxState &received);
   void publish_address_();
   bool scan_channel_();
+  void process_radio_();
+  void schedule_status_poll_(uint32_t delay);
   void start_radio_();
   void recover_radio_();
   bool send_state_(uint8_t command, bool auto_brightness = false);
@@ -75,7 +77,7 @@ class Halo2 : public PollingComponent, public LR1121Transport {
   ESPPreferenceObject link_preference_;
   halo2_protocol::Address radio_address_{halo2_protocol::RADIO_ADDRESS};
   std::array<Candidate, 4> candidates_{};
-  uint32_t scan_started_{0};
+  bool scan_expired_{false};
   uint8_t scan_step_{0};
   uint8_t radio_channel_{halo2_protocol::RADIO_CHANNEL};
   bool address_configured_{false};
@@ -86,7 +88,6 @@ class Halo2 : public PollingComponent, public LR1121Transport {
   uint8_t app_pid_{0};
   uint8_t last_pcf_{0};
   Transmission transmission_{Transmission::NONE};
-  uint32_t recovery_at_{0};
   uint32_t recovery_delay_{1000};
   bool recovering_{false};
   bool scan_pending_{false};
@@ -98,9 +99,10 @@ class Halo2 : public PollingComponent, public LR1121Transport {
   uint32_t command_sent_at_{0};
   bool command_sent_{false};
   bool pending_auto_brightness_{false};
-  uint32_t status_poll_interval_{0};
+  uint32_t processing_interval_{50};
+  uint32_t last_process_at_{0};
+  bool status_poll_pending_{false};
   uint32_t next_status_poll_{0};
-  uint32_t status_poll_started_{0};
   uint32_t status_request_started_{0};
   uint8_t status_request_pcf_{0};
   uint8_t status_read_attempts_{0};

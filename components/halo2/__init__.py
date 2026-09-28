@@ -10,6 +10,7 @@ from esphome.const import (
     CONF_ID,
     CONF_IRQ_PIN,
     CONF_RESET_PIN,
+    CONF_UPDATE_INTERVAL,
     ENTITY_CATEGORY_CONFIG,
     ENTITY_CATEGORY_DIAGNOSTIC,
 )
@@ -110,7 +111,11 @@ FINAL_VALIDATE_SCHEMA = spi.final_validate_device_schema(
 
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
-    await cg.register_component(var, config)
+    # Preserve the existing YAML names: update_interval services commands/RX,
+    # while the PollingComponent interval schedules lamp status queries.
+    await cg.register_component(
+        var, {**config, CONF_UPDATE_INTERVAL: config["status_poll_interval"]}
+    )
     await spi.register_spi_device(var, config)
     cg.add(var.set_reset_pin(await cg.gpio_pin_expression(config[CONF_RESET_PIN])))
     cg.add(var.set_busy_pin(await cg.gpio_pin_expression(config[CONF_BUSY_PIN])))
@@ -136,4 +141,4 @@ async def to_code(config):
         await button.new_button(config["discover_button"], var)
     if "auto_button" in config:
         await button.new_button(config["auto_button"], var)
-    cg.add(var.set_status_poll_interval(config["status_poll_interval"]))
+    cg.add(var.set_processing_interval(config[CONF_UPDATE_INTERVAL]))
