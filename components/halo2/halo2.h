@@ -27,7 +27,10 @@ class Halo2 : public PollingComponent {
   void set_radio_status(text_sensor::TextSensor *value) { radio_status_ = value; }
   void set_radio_address_sensor(text_sensor::TextSensor *value) { radio_address_sensor_ = value; }
   void set_auto_discover(bool value) { auto_discover_ = value; }
-  void set_radio_address(const halo2_protocol::Address &value) { radio_address_ = value; address_configured_ = true; }
+  void set_radio_address(const halo2_protocol::Address &value) {
+    radio_address_ = value;
+    address_configured_ = true;
+  }
   void set_radio_channel(uint8_t value) { radio_channel_ = value; }
   void set_processing_interval(uint32_t value) { processing_interval_ = value; }
   void set_command_debounce(uint32_t value) { command_debounce_ = value; }
@@ -37,9 +40,16 @@ class Halo2 : public PollingComponent {
   bool accepts_commands() const { return ready_ && !publishing_ && !discovering_; }
   void control_light(light::LightState *light, bool front);
   void control_ultrasonic(bool value);
-  void resend() { if (accepts_commands()) queue_command_(0x02); }
+  void resend() {
+    if (accepts_commands()) queue_command_(halo2_protocol::Command::POWER);
+  }
 
  protected:
+  // Persisted selection is a bitmask, distinct from the on-air LampMode enum.
+  enum SavedMode : uint8_t { NONE = 0, FRONT = 1, BACK = 2, BOTH = FRONT | BACK };
+  static constexpr uint8_t NO_PENDING_COMMAND = 0;
+  static constexpr uint32_t RECOVERY_INITIAL_DELAY_MS = 1000;
+
   void queue_command_(uint8_t command);
   void publish_lights_();
   void publish_light_(light::LightState *light, bool front);
@@ -59,7 +69,7 @@ class Halo2 : public PollingComponent {
     halo2_protocol::Address address{};
     uint8_t channel{0};
     uint8_t version{0};
-    uint8_t packet_options{0x01};
+    uint8_t packet_options{halo2_protocol::DEFAULT_PACKET_OPTIONS};
     uint8_t reserved{0};
   };
   struct Candidate {
@@ -88,13 +98,13 @@ class Halo2 : public PollingComponent {
   uint8_t app_pid_{0};
   uint8_t last_pcf_{0};
   Transmission transmission_{Transmission::NONE};
-  uint32_t recovery_delay_{1000};
+  uint32_t recovery_delay_{RECOVERY_INITIAL_DELAY_MS};
   bool recovering_{false};
   bool scan_pending_{false};
   halo2_protocol::HaloRxState state_;
-  uint32_t frequency_deviation_{160000};
-  uint8_t pulse_shape_{0x09};
-  uint8_t pending_command_{0};
+  uint32_t frequency_deviation_{LR1121Radio::DEFAULT_DEVIATION_HZ};
+  uint8_t pulse_shape_{LR1121Radio::DEFAULT_PULSE_SHAPE};
+  uint8_t pending_command_{NO_PENDING_COMMAND};
   uint32_t command_debounce_{1000};
   uint32_t command_sent_at_{0};
   bool command_sent_{false};
@@ -109,7 +119,7 @@ class Halo2 : public PollingComponent {
   uint8_t status_timeouts_{0};
   bool awaiting_status_{false};
   bool status_followup_{false};
-  uint8_t saved_mode_{3};
+  uint8_t saved_mode_{SavedMode::BOTH};
   bool ready_{false};
   bool publishing_{false};
 };
