@@ -1,7 +1,7 @@
 from esphome import pins
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import button, light, spi, switch, text_sensor
+from esphome.components import button, light, select, spi, text_sensor
 from esphome.const import (
     CONF_BUSY_PIN,
     CONF_DATA_RATE,
@@ -15,13 +15,13 @@ from esphome.const import (
     ENTITY_CATEGORY_DIAGNOSTIC,
 )
 
-AUTO_LOAD = ["button", "light", "switch", "text_sensor"]
+AUTO_LOAD = ["button", "light", "select", "text_sensor"]
 DEPENDENCIES = ["esp32", "spi"]
 
 halo2_ns = cg.esphome_ns.namespace("halo2")
 Halo2 = halo2_ns.class_("Halo2", cg.PollingComponent)
 Halo2Light = halo2_ns.class_("Halo2Light", light.LightOutput)
-Halo2UltrasonicSwitch = halo2_ns.class_("Halo2UltrasonicSwitch", switch.Switch)
+Halo2UltrasonicSelect = halo2_ns.class_("Halo2UltrasonicSelect", select.Select)
 Halo2DiscoverButton = halo2_ns.class_("Halo2DiscoverButton", button.Button)
 Halo2AutoButton = halo2_ns.class_("Halo2AutoButton", button.Button)
 
@@ -73,10 +73,9 @@ BASE_SCHEMA = cv.Schema(
         ),
         cv.Required("front_light"): LIGHT_SCHEMA,
         cv.Required("back_light"): LIGHT_SCHEMA,
-        cv.Required("ultrasonic"): switch.switch_schema(
-            Halo2UltrasonicSwitch,
-            block_inverted=True,
-            default_restore_mode="RESTORE_DEFAULT_OFF",
+        cv.Required("ultrasonic"): select.select_schema(
+            Halo2UltrasonicSelect,
+            entity_category=ENTITY_CATEGORY_CONFIG,
             icon="mdi:motion-sensor",
         ),
         cv.Required("radio_status"): text_sensor.text_sensor_schema(
@@ -131,8 +130,11 @@ async def to_code(config):
         cg.add(var.set_radio_channel(config["radio_channel"]))
     await light.new_light(config["front_light"], var, True)
     await light.new_light(config["back_light"], var, False)
-    ultrasonic = await switch.new_switch(config["ultrasonic"], var)
-    cg.add(var.set_ultrasonic_switch(ultrasonic))
+    ultrasonic = await select.new_select(
+        config["ultrasonic"], var,
+        options=["Disabled", "3 minutes", "5 minutes", "10 minutes", "15 minutes"],
+    )
+    cg.add(var.set_ultrasonic_select(ultrasonic))
     status = await text_sensor.new_text_sensor(config["radio_status"])
     cg.add(var.set_radio_status(status))
     if "radio_address_sensor" in config:

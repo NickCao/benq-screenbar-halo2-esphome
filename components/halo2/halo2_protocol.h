@@ -12,14 +12,16 @@ constexpr std::array<uint8_t, 3> RADIO_CHANNELS{5, 46, 75};
 constexpr uint8_t RADIO_CHANNEL = RADIO_CHANNELS[0];
 constexpr unsigned RADIO_BASE_FREQUENCY_MHZ = 2400;
 
-// Accept received codes 0..5; only these three commands have known semantics.
-enum Command : uint8_t { POWER = 0x02, SETTINGS = 0x03, STATUS = 0x04 };
+// The controller also sends 0x05 when going to sleep; it saves the timeout.
+enum Command : uint8_t { POWER = 0x02, SETTINGS = 0x03, STATUS = 0x04, ULTRASONIC_TIMEOUT = 0x05 };
 constexpr uint8_t MAX_COMMAND_CODE = 0x05;
 enum LampMode : uint8_t { FRONT_ONLY = 0, BACK_ONLY = 1, BOTH = 2 };
+enum UltrasonicTimeout : uint8_t { MINUTES_3 = 0, MINUTES_5 = 1, MINUTES_10 = 2, MINUTES_15 = 3 };
+constexpr std::array<uint8_t, 4> ULTRASONIC_TIMEOUT_MINUTES{3, 5, 10, 15};
 constexpr uint8_t CONTROL_POWER = 0x01, CONTROL_AUTO_BRIGHTNESS = 0x02, CONTROL_ULTRASONIC = 0x20;
 constexpr uint8_t CONTROL_MODE_MASK = 0x18, CONTROL_MODE_SHIFT = 3;
 constexpr uint8_t PCF_NO_ACK = 0x01, PCF_PID_MASK = 0x06, PCF_PID_SHIFT = 1, PCF_LENGTH_SHIFT = 3;
-constexpr uint8_t DEFAULT_PACKET_OPTIONS = 0x01, MAX_PACKET_OPTIONS = 0x01, PACKET_SUFFIX = 0x02;
+constexpr uint8_t PACKET_SUFFIX = 0x02;
 constexpr uint8_t MIN_BRIGHTNESS_PERCENT = 1, MAX_BRIGHTNESS_PERCENT = 100;
 constexpr uint16_t MIN_TEMPERATURE_K = 2700, MAX_TEMPERATURE_K = 6500, TEMPERATURE_STEP_K = 25;
 constexpr uint16_t CRC_INITIAL = 0xFFFF, CRC_POLYNOMIAL = 0x1021, CRC_TOP_BIT = 0x8000;
@@ -36,7 +38,7 @@ enum Field : size_t {
   BACK_BRIGHTNESS,
   BACK_TEMPERATURE_HIGH,
   BACK_TEMPERATURE_LOW,
-  PACKET_OPTIONS,
+  ULTRASONIC_TIMEOUT,
   SUFFIX,
   CRC_HIGH,
   CRC_LOW,
@@ -73,14 +75,15 @@ inline uint16_t halo_crc(uint8_t pcf, const uint8_t *payload, size_t length, con
 
 inline Payload make_payload(uint8_t command, bool power, bool pir, bool front, bool back, uint8_t front_brightness,
                             uint8_t back_brightness, uint16_t color_temperature,
-                            uint8_t packet_options = DEFAULT_PACKET_OPTIONS, bool auto_brightness = false) {
+                            UltrasonicTimeout ultrasonic_timeout = UltrasonicTimeout::MINUTES_5,
+                            bool auto_brightness = false) {
   const LampMode mode = front && back ? LampMode::BOTH : (back ? LampMode::BACK_ONLY : LampMode::FRONT_ONLY);
   const uint8_t control =
       static_cast<uint8_t>((pir ? CONTROL_ULTRASONIC : 0U) | (mode << CONTROL_MODE_SHIFT) |
                            (auto_brightness ? CONTROL_AUTO_BRIGHTNESS : 0U) | (power ? CONTROL_POWER : 0U));
   const auto high = static_cast<uint8_t>(color_temperature >> 8U);
   const auto low = static_cast<uint8_t>(color_temperature);
-  return {command, control, front_brightness, high, low, back_brightness, high, low, packet_options, PACKET_SUFFIX};
+  return {command, control, front_brightness, high, low, back_brightness, high, low, ultrasonic_timeout, PACKET_SUFFIX};
 }
 
 inline uint8_t request_pcf(uint8_t pid) {
@@ -111,14 +114,15 @@ struct HaloRxState {
   bool valid = false, power = false, pir = false, front = false, back = false;
   bool reply = false;
   uint8_t command = 0, front_brightness = 0, back_brightness = 0, pcf = 0;
-  uint8_t packet_options = DEFAULT_PACKET_OPTIONS;
+  UltrasonicTimeout ultrasonic_timeout = UltrasonicTimeout::MINUTES_5;
   uint16_t color_temperature = 0;
 };
 
 inline bool decode_frame(const uint8_t *raw, size_t length, HaloRxState &state, const Address &address = RADIO_ADDRESS,
                          bool allow_reply = false) {
   state = {};
-  if (length != FRAME_SIZE || raw[frame::PACKET_OPTIONS] > MAX_PACKET_OPTIONS || raw[frame::SUFFIX] != PACKET_SUFFIX)
+  if (length != FRAME_SIZE || raw[frame::ULTRASONIC_TIMEOUT] > UltrasonicTimeout::MINUTES_15 ||
+      raw[frame::SUFFIX] != PACKET_SUFFIX)
     return false;
   // Bit 0 is No-ACK: lamp replies set it. Discovery accepts requests only;
   // normal reception may decode replies for a matching status query.
@@ -145,7 +149,7 @@ inline bool decode_frame(const uint8_t *raw, size_t length, HaloRxState &state, 
   state.front_brightness = raw[frame::FRONT_BRIGHTNESS];
   state.back_brightness = raw[frame::BACK_BRIGHTNESS];
   state.color_temperature = temperature;
-  state.packet_options = raw[frame::PACKET_OPTIONS];
+  state.ultrasonic_timeout = static_cast<UltrasonicTimeout>(raw[frame::ULTRASONIC_TIMEOUT]);
   state.valid = true;
   return true;
 }

@@ -43,7 +43,7 @@ halo2:
       brightness: 91%
       color_temperature: 3925 K
   ultrasonic:
-    id: pir_switch
+    id: ultrasonic_sensor
     name: "Ultrasonic sensor"
   auto_button:
     name: "Auto brightness"

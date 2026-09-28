@@ -56,24 +56,24 @@ void Halo2::setup() {
   state_.power = front.is_on() || back.is_on();
   state_.front = state_.power ? front.is_on() : (saved_mode_ & SavedMode::FRONT);
   state_.back = state_.power ? back.is_on() : (saved_mode_ & SavedMode::BACK);
-  state_.pir = ultrasonic_switch_->get_initial_state_with_restore_mode().value_or(false);
   state_.front_brightness = brightness_percent(front.get_brightness());
   state_.back_brightness = brightness_percent(back.get_brightness());
   state_.color_temperature = temperature_kelvin(front.get_color_temperature());
   save_mode_();
   publish_lights_();
-  ultrasonic_switch_->publish_state(state_.pir);
+  // Read the sensor's enable/timeout settings from the lamp before accepting
+  // commands. Restoring a UI default must not disable the sensor on boot.
 
   link_preference_ = global_preferences->make_preference<SavedLink>(LINK_PREFERENCE_KEY);
   SavedLink saved{};
   const bool restored = !address_configured_ && link_preference_.load(&saved) && saved.version == SAVED_LINK_VERSION &&
-                        saved.packet_options <= protocol::MAX_PACKET_OPTIONS &&
+                        saved.ultrasonic_timeout <= protocol::UltrasonicTimeout::MINUTES_15 &&
                         std::find(protocol::RADIO_CHANNELS.begin(), protocol::RADIO_CHANNELS.end(), saved.channel) !=
                             protocol::RADIO_CHANNELS.end();
   if (restored) {
     radio_address_ = saved.address;
     radio_channel_ = saved.channel;
-    state_.packet_options = saved.packet_options;
+    state_.ultrasonic_timeout = saved.ultrasonic_timeout;
   }
   discovering_ = auto_discover_ && !address_configured_ && !restored;
   // Setup, reception, transmission and recovery all advance in loop().
@@ -94,7 +94,7 @@ void Halo2::recover_radio_() {
   recovering_ = true;
   transmission_ = Transmission::NONE;
   // Never replay an interrupted command batch after reconnecting to the lamp.
-  pending_command_ = NO_PENDING_COMMAND;
+  pending_commands_.reset();
   pending_auto_brightness_ = false;
   cancel_status_poll_();
   cancel_timeout("discovery_dwell");
@@ -120,7 +120,7 @@ void Halo2::publish_address_() {
 
 void Halo2::start_discovery() {
   if (!ready_) return;
-  pending_command_ = NO_PENDING_COMMAND;
+  pending_commands_.reset();
   pending_auto_brightness_ = false;
   cancel_status_poll_();
   cancel_timeout("discovery_dwell");
@@ -235,13 +235,13 @@ void Halo2::loop() {
       radio_channel_ = channel;
       discovering_ = false;
       cancel_timeout("discovery_dwell");
-      const SavedLink saved{address, channel, SAVED_LINK_VERSION, received.packet_options, 0};
+      const SavedLink saved{address, channel, SAVED_LINK_VERSION, received.ultrasonic_timeout, 0};
       const bool persisted = link_preference_.save(&saved) && global_preferences->sync();
       state_ = received;
       schedule_status_poll_(DISCOVERY_STATUS_DELAY_MS);
       save_mode_();
       publish_lights_();
-      ultrasonic_switch_->publish_state(state_.pir);
+      publish_ultrasonic_();
       publish_address_();
       publish_status_(persisted ? "Address discovered and saved" : "Address discovered; save failed");
       if (!persisted) status_set_warning();
@@ -266,19 +266,20 @@ void Halo2::dump_config() {
   ESP_LOGCONFIG(TAG, "  Frequency: %u MHz", protocol::RADIO_BASE_FREQUENCY_MHZ + radio_channel_);
   ESP_LOGCONFIG(TAG, "  Command debounce: %" PRIu32 " ms", command_debounce_);
   LOG_UPDATE_INTERVAL(this);
+  LOG_SELECT("  ", "Ultrasonic sensor", ultrasonic_select_);
 }
 
-void Halo2::queue_command_(uint8_t command) {
-  // Mode/brightness commands do not change global power. Preserve a power
-  // command through the entire batch, in either direction.
-  if (pending_command_ != Command::POWER) pending_command_ = command;
+void Halo2::queue_command_(Command command) {
+  // Retain each required command, coalescing repeated requests to the latest
+  // desired state instead of replaying intermediate slider/toggle values.
+  pending_commands_.set(command);
 }
 
 bool Halo2::send_state_(uint8_t command, bool auto_brightness) {
   if (!radio_.ready()) return false;
-  const auto payload =
-      protocol::make_payload(command, state_.power, state_.pir, state_.front, state_.back, state_.front_brightness,
-                             state_.back_brightness, state_.color_temperature, state_.packet_options, auto_brightness);
+  const auto payload = protocol::make_payload(command, state_.power, state_.pir, state_.front, state_.back,
+                                              state_.front_brightness, state_.back_brightness, state_.color_temperature,
+                                              state_.ultrasonic_timeout, auto_brightness);
   last_pcf_ = protocol::request_pcf(app_pid_++);
   return radio_.send(protocol::make_air_frame(last_pcf_, payload, radio_.address()));
 }
@@ -347,11 +348,26 @@ void Halo2::synchronize_temperature_(light::LightState *source) {
   control_light(peer, peer == front_light_);
 }
 
-void Halo2::control_ultrasonic(bool value) {
-  if (!accepts_commands()) return;
-  state_.pir = value;
-  ultrasonic_switch_->publish_state(state_.pir);
-  queue_command_(Command::SETTINGS);
+void Halo2::control_ultrasonic(size_t index) {
+  if (!accepts_commands() || index > protocol::UltrasonicTimeout::MINUTES_15 + 1U) return;
+  const bool enabled = index != 0;
+  if (enabled) {
+    const auto timeout = static_cast<protocol::UltrasonicTimeout>(index - 1);
+    if (timeout != state_.ultrasonic_timeout) {
+      state_.ultrasonic_timeout = timeout;
+      queue_command_(Command::ULTRASONIC_TIMEOUT);
+    }
+  }
+  if (enabled != state_.pir) {
+    state_.pir = enabled;
+    queue_command_(Command::SETTINGS);
+  }
+  publish_ultrasonic_();
+}
+
+void Halo2::publish_ultrasonic_() {
+  // Disabling presence detection retains the lamp's last timeout duration.
+  ultrasonic_select_->publish_state(state_.pir ? static_cast<size_t>(state_.ultrasonic_timeout) + 1 : size_t{0});
 }
 
 void Halo2::publish_light_(light::LightState *light, bool front) {
@@ -389,23 +405,24 @@ void Halo2::apply_received_(const protocol::HaloRxState &received) {
                        received.back != state_.back || received.pir != state_.pir ||
                        received.front_brightness != state_.front_brightness ||
                        received.back_brightness != state_.back_brightness ||
-                       received.color_temperature != state_.color_temperature;
-  if (received.packet_options != state_.packet_options) {
-    const SavedLink saved{radio_address_, radio_channel_, SAVED_LINK_VERSION, received.packet_options, 0};
-    link_preference_.save(&saved);
-  }
+                       received.color_temperature != state_.color_temperature ||
+                       received.ultrasonic_timeout != state_.ultrasonic_timeout;
+  // Save confirmed settings even when they match an optimistic local change.
+  // ESPHome skips flash writes when the stored preference is unchanged.
+  const SavedLink saved{radio_address_, radio_channel_, SAVED_LINK_VERSION, received.ultrasonic_timeout, 0};
+  link_preference_.save(&saved);
   state_ = received;
   if (changed) {
     save_mode_();
     publish_lights_();
-    ultrasonic_switch_->publish_state(state_.pir);
+    publish_ultrasonic_();
   }
   status_clear_warning();
   publish_status_(received.reply ? "Lamp status received" : "Controller update received");
 }
 
 void Halo2::update() {
-  if (ready_ && !discovering_ && pending_command_ == NO_PENDING_COMMAND && transmission_ == Transmission::NONE &&
+  if (ready_ && !discovering_ && pending_commands_.none() && transmission_ == Transmission::NONE &&
       !status_poll_pending_ && !awaiting_status_ && !status_followup_)
     schedule_status_poll_(0);
 }
@@ -424,17 +441,24 @@ void Halo2::cancel_status_poll_() {
 void Halo2::process_radio_() {
   if (!ready_ || discovering_) return;
   if (transmission_ != Transmission::NONE) return;
-  if (pending_command_ != NO_PENDING_COMMAND) {
+  if (pending_commands_.any()) {
     // Send the first request without a debounce delay. During the cooldown
     // after a batch, retain only the latest requested state and send it once
     // the interval expires; incoming changes do not extend the interval.
     const uint32_t now = millis();
     if (command_sent_ && now - command_sent_at_ < command_debounce_) return;
     if (!radio_.idle()) return;
-    const uint8_t command = pending_command_;
+    const auto command = pending_commands_.test(Command::POWER)      ? Command::POWER
+                         : pending_commands_.test(Command::SETTINGS) ? Command::SETTINGS
+                                                                     : Command::ULTRASONIC_TIMEOUT;
     const bool auto_brightness = pending_auto_brightness_;
-    pending_command_ = NO_PENDING_COMMAND;
-    pending_auto_brightness_ = false;
+    pending_commands_.reset(command);
+    // Power-on includes settings, but power-off does not apply the sensor
+    // enable bit. Keep those settings queued for a separate debounced batch.
+    if (command == Command::SETTINGS || (command == Command::POWER && state_.power)) {
+      pending_commands_.reset(Command::SETTINGS);
+      pending_auto_brightness_ = false;
+    }
     // A reply to an earlier query must not overwrite a newer local command.
     cancel_status_poll_();
     const auto send = [&](uint8_t opcode) {
@@ -484,9 +508,10 @@ void Halo2::process_radio_() {
         status_timeouts_ = 0;
         if (!front_light_->is_transformer_active() && !back_light_->is_transformer_active()) {
           apply_received_(received);
-          ESP_LOGD(TAG, "Lamp status: power %s, mode %u/%u, front %u%%, back %u%%, %u K", ONOFF(state_.power),
-                   state_.front, state_.back, state_.front_brightness, state_.back_brightness,
-                   state_.color_temperature);
+          ESP_LOGD(TAG, "Lamp status: power %s, mode %u/%u, front %u%%, back %u%%, %u K, ultrasonic %s, timeout %u min",
+                   ONOFF(state_.power), state_.front, state_.back, state_.front_brightness, state_.back_brightness,
+                   state_.color_temperature, ONOFF(state_.pir),
+                   protocol::ULTRASONIC_TIMEOUT_MINUTES[state_.ultrasonic_timeout]);
         }
       }
     }

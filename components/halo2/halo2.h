@@ -1,10 +1,11 @@
 #pragma once
 
+#include <bitset>
 #include "esphome/core/component.h"
 #include "esphome/core/preferences.h"
 #include "esphome/components/button/button.h"
 #include "esphome/components/light/light_output.h"
-#include "esphome/components/switch/switch.h"
+#include "esphome/components/select/select.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "halo2_protocol.h"
 #include "lr1121_radio.h"
@@ -23,7 +24,7 @@ class Halo2 : public PollingComponent {
   void set_frequency_deviation(uint32_t value) { frequency_deviation_ = value; }
   void set_pulse_shape(uint8_t value) { pulse_shape_ = value; }
   void set_light(light::LightState *value, bool front) { (front ? front_light_ : back_light_) = value; }
-  void set_ultrasonic_switch(switch_::Switch *value) { ultrasonic_switch_ = value; }
+  void set_ultrasonic_select(select::Select *value) { ultrasonic_select_ = value; }
   void set_radio_status(text_sensor::TextSensor *value) { radio_status_ = value; }
   void set_radio_address_sensor(text_sensor::TextSensor *value) { radio_address_sensor_ = value; }
   void set_auto_discover(bool value) { auto_discover_ = value; }
@@ -37,9 +38,9 @@ class Halo2 : public PollingComponent {
   void start_discovery();
   void start_auto_brightness();
 
-  bool accepts_commands() const { return ready_ && !publishing_ && !discovering_; }
+  bool accepts_commands() const { return ready_ && state_.valid && !publishing_ && !discovering_; }
   void control_light(light::LightState *light, bool front);
-  void control_ultrasonic(bool value);
+  void control_ultrasonic(size_t index);
   void resend() {
     if (accepts_commands()) queue_command_(halo2_protocol::Command::POWER);
   }
@@ -47,11 +48,11 @@ class Halo2 : public PollingComponent {
  protected:
   // Persisted selection is a bitmask, distinct from the on-air LampMode enum.
   enum SavedMode : uint8_t { NONE = 0, FRONT = 1, BACK = 2, BOTH = FRONT | BACK };
-  static constexpr uint8_t NO_PENDING_COMMAND = 0;
   static constexpr uint32_t RECOVERY_INITIAL_DELAY_MS = 1000;
 
-  void queue_command_(uint8_t command);
+  void queue_command_(halo2_protocol::Command command);
   void publish_lights_();
+  void publish_ultrasonic_();
   void publish_light_(light::LightState *light, bool front);
   void synchronize_temperature_(light::LightState *source);
   void publish_status_(const char *status);
@@ -70,7 +71,8 @@ class Halo2 : public PollingComponent {
     halo2_protocol::Address address{};
     uint8_t channel{0};
     uint8_t version{0};
-    uint8_t packet_options{halo2_protocol::DEFAULT_PACKET_OPTIONS};
+    // Same byte and values as the former packet_options field (version 2).
+    halo2_protocol::UltrasonicTimeout ultrasonic_timeout{halo2_protocol::UltrasonicTimeout::MINUTES_5};
     uint8_t reserved{0};
   };
   struct Candidate {
@@ -81,7 +83,7 @@ class Halo2 : public PollingComponent {
 
   light::LightState *front_light_{nullptr};
   light::LightState *back_light_{nullptr};
-  switch_::Switch *ultrasonic_switch_{nullptr};
+  select::Select *ultrasonic_select_{nullptr};
   text_sensor::TextSensor *radio_status_{nullptr};
   text_sensor::TextSensor *radio_address_sensor_{nullptr};
   ESPPreferenceObject mode_preference_;
@@ -105,7 +107,7 @@ class Halo2 : public PollingComponent {
   halo2_protocol::HaloRxState state_;
   uint32_t frequency_deviation_{LR1121Radio::DEFAULT_DEVIATION_HZ};
   uint8_t pulse_shape_{LR1121Radio::DEFAULT_PULSE_SHAPE};
-  uint8_t pending_command_{NO_PENDING_COMMAND};
+  std::bitset<halo2_protocol::MAX_COMMAND_CODE + 1> pending_commands_;
   uint32_t command_debounce_{1000};
   uint32_t command_sent_at_{0};
   bool command_sent_{false};
@@ -149,12 +151,12 @@ class Halo2Light : public light::LightOutput {
   bool forward_update_{false};
 };
 
-class Halo2UltrasonicSwitch : public switch_::Switch {
+class Halo2UltrasonicSelect : public select::Select {
  public:
-  explicit Halo2UltrasonicSwitch(Halo2 *parent) : parent_(parent) {}
+  explicit Halo2UltrasonicSelect(Halo2 *parent) : parent_(parent) {}
 
  protected:
-  void write_state(bool value) override { parent_->control_ultrasonic(value); }
+  void control(size_t index) override { parent_->control_ultrasonic(index); }
   Halo2 *parent_;
 };
 
