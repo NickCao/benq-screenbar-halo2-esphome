@@ -8,24 +8,8 @@ permissions:
   contents: read
 
 jobs:
-  protocol:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: Legacy BM5602 CRC vectors
-        run: python -m unittest discover -s tests -v
-
   firmware:
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        config:
-          - screenbar-halo2-lr1121.yaml
-          - screenbar-halo2.yaml
     steps:
       - uses: actions/checkout@v5
       - uses: actions/cache@v4
@@ -34,7 +18,8 @@ jobs:
           key: esphome-${{ runner.os }}-${{ hashFiles('scripts/esphome') }}
       - name: Create compile-only secrets
         run: |
-          sed 's/REPLACE_WITH_A_32_BYTE_BASE64_KEY/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=/' \
+          build_api_key="$(openssl rand -base64 32)"
+          sed "s|REPLACE_WITH_A_32_BYTE_BASE64_KEY|${build_api_key}|" \
             secrets.example.yaml > secrets.yaml
       - name: Compile firmware with Podman
-        run: ./scripts/esphome compile "${{ matrix.config }}"
+        run: ./scripts/esphome compile screenbar-halo2-lr1121.yaml

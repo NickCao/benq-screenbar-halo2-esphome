@@ -1,6 +1,17 @@
 # Waveshare ESP32-S3-LR1121-HF, using its onboard 2.4 GHz radio.
+spi:
+  id: radio_spi
+  interface: hardware
+  clk_pin: GPIO40
+  mosi_pin: GPIO45
+  miso_pin: GPIO46
+
 halo2:
-  radio: LR1121
+  spi_id: radio_spi
+  cs_pin: GPIO42
+  reset_pin: GPIO39
+  busy_pin: GPIO41
+  irq_pin: GPIO38
   auto_discover: true
   radio_address_sensor:
     name: "Radio address"

@@ -6,16 +6,13 @@ The bridge follows the [ESPHome external-component layout](https://esphome.io/co
 
 | File | Responsibility |
 |---|---|
-| `__init__.py` | Configuration validation, entity creation, and selection of the radio backend |
+| `__init__.py` | Configuration validation, entity creation, SPI registration, and GPIO code generation |
 | `halo2.h`, `halo2.cpp` | One shared lamp state, native entity adapters, command batching, status polling, preference storage, and discovery coordination |
 | `halo2_protocol.h` | Payloads, CRC, canonical/air-frame conversion, validation, and address extraction; independent of ESPHome and GPIO |
 | `lr1121_radio.h` | LR1121 command/packet handling over a templated transport |
-| `lr1121_halo2.h` | Waveshare GPIO/SPI transport and LR1121 adapter |
-| `bm5602_halo2.h` | Legacy ATOM Lite/BM5602 SPI, clocked direct TX, and passive RX |
+| `lr1121_transport.h` | ESPHome `SPIDevice`/GPIO transport |
 
-Python code generation defines `USE_HALO2_LR1121` or `USE_HALO2_BM5602`. Hardware-specific headers are guarded by these defines because ESPHome includes component headers in its generated umbrella header. This prevents the unselected board's GPIO code from entering the build.
-
-The radio backends retain their existing header-based implementation. The LR1121 command engine is templated; the timing-sensitive legacy BM5602 routines remain together. The component owns the HA-facing state, and protocol encoding is shared between backends.
+`Halo2` inherits the ESPHome SPI transport and owns its LR1121 command engine and packet sequence counter. The command engine remains independent of ESPHome through a templated transport. The component owns the HA-facing state; protocol encoding lives separately from hardware access.
 
 ## HA state and radio commands
 
@@ -51,6 +48,8 @@ At boot, light preferences and the saved selection initialize the bridge without
 
 The driver advances up to four SPI transactions per ESPHome loop call. Reset pulse timing, startup, BUSY waits, calibration, TX completion, RX reads and rearming all use timed states. Individual SPI transfers remain synchronous and bounded to 32 bytes at 1 MHz; the only explicit delay is one microsecond for NSS-to-BUSY propagation. The component keeps its loop enabled to service the radio independently of the 50 ms application update.
 
+The transport registers with ESPHome's SPI bus and uses generated GPIO objects for CS, reset, BUSY and IRQ. Each transfer releases CS and the bus before waiting for the radio, allowing other SPI devices to share the bus. Radio recovery reuses the registered device without resetting or freeing the shared bus. ESPHome logs SPI transfer errors; the radio's response checks and BUSY/TX deadlines remain responsible for detecting failed operations because the SPI transfer API has no error return.
+
 Faults stop the current operation and schedule radio reinitialization with an exponential retry delay of 1–30 seconds. The bridge keeps Wi-Fi/API connectivity and its saved address, channel and packet options. Successful initialization resets the retry delay, restores passive reception or restarts an interrupted discovery, and schedules a fresh lamp-state query. In-flight and pending commands are dropped so recovery cannot replay stale actions. Failed initialization also retries instead of permanently marking the component failed.
 
 ## LR1121 status polling
@@ -85,7 +84,7 @@ Normal reception holds one packet until the next receive-buffer check. This prev
 
 ## Packet representations
 
-Both backends use a canonical 13-byte representation internally:
+The protocol codec uses a canonical 13-byte representation internally:
 
 ```text
 PCF (1 byte) | application payload (10 bytes) | CRC16 (2 bytes)
@@ -106,7 +105,7 @@ The payload is:
 
 Modes are front-only `0`, back-only `1`, and both `2`. Request PCFs are formed as `0x50 | ((pid & 3) << 1)`.
 
-PCF bit 0 is No-ACK: controller requests clear it, and lamp replies set it. Discovery and the legacy receiver accept requests only. LR1121 normal reception also decodes replies, but only the polling sequence above may publish their state. Packet ID is a separate two-bit field. Accepted frames must have the expected length, payload-length field, command range, suffix, mode, CRC, and in-range brightness/temperature.
+PCF bit 0 is No-ACK: controller requests clear it, and lamp replies set it. Discovery accepts requests only. Normal reception also decodes replies, but only the polling sequence above may publish their state. Packet ID is a separate two-bit field. Accepted frames must have the expected length, payload-length field, command range, suffix, mode, CRC, and in-range brightness/temperature.
 
 During Auto adjustment, the rear temperature field in replies can lag the front field. The bridge reads the front field as the logical shared temperature, while retaining both independent brightness values.
 
@@ -124,26 +123,10 @@ CRC uses polynomial `0x1021`, initial state `0xFFFF`, and covers the on-air addr
 
 See the [Semtech LR1121 user manual](https://files.waveshare.com/wiki/Core1121/UserManual_LR1121_v1_2.pdf) for the transceiver commands and RF configuration. The ScreenBar framing above is implemented by this project, not provided by a LoRa modem.
 
-### Legacy BM5602 format
-
-The BM5602 backend retains its previously working byte-aligned FIFO/direct-input representation. Its CRC model starts at `0xEFDF` and covers the reversed address, canonical PCF byte, and payload. Do not apply these byte-aligned vectors to LR1121's raw nine-bit air format.
-
-During direct transmission, GIO2 becomes data input and GIO3 exposes TBCLK. The ESP32 changes each bit on the low TBCLK edge, sends MSB first, and then returns the BM5602 to passive receive mode. A missing clock produces `BM5602 NO CLOCK`.
-
-The existing [`test_bm5602_crc.py`](../tests/test_bm5602_crc.py) vectors use register address `9C EA BB 86`:
-
-| Vector | PCF | CRC |
-|---|---|---|
-| Stock request | `0x54` | `0x20B9` |
-| Power on | `0x50` | `0xE962` |
-| Power off | `0x50` | `0x0241` |
-
-These are legacy CRC reference checks, not an end-to-end test of the component or LR1121 driver.
-
 ## Reliability and verification
 
-**Command sent** means the backend completed transmission. On LR1121 this includes observing TX_DONE, not confirming a visible lamp change. **Lamp status received** means a refresh/read polling cycle returned validated lamp state.
+**Command sent** means the radio completed transmission and reported TX_DONE, not that a visible lamp change was confirmed. **Lamp status received** means a refresh/read polling cycle returned validated lamp state.
 
-The original controller sends settings snapshots, so a later valid request can recover missed updates. LR1121 polling also catches autonomous presence changes, Auto brightness adjustments, and missed requests. Collisions, range, or a disconnected lamp can delay synchronization; polling retains the last known state until a reply arrives. BM5602 remains limited to passive controller synchronization.
+The original controller sends settings snapshots, so a later valid request can recover missed updates. LR1121 polling also catches autonomous presence changes, Auto brightness adjustments, and missed requests. Collisions, range, or a disconnected lamp can delay synchronization; polling retains the last known state until a reply arrives.
 
-The Waveshare implementation has been exercised on hardware for discovery, saved-link restoration, native API control, front/back operation, grouped on/off commands, Auto brightness, and lamp status reception. CI separately compiles both board configurations using the pinned Podman image and runs the existing BM5602 CRC vectors. A successful build or TX_DONE alone does not establish lamp acknowledgement or RF isolation measurements.
+The Waveshare implementation has been exercised on hardware for discovery, saved-link restoration, native API control, front/back operation, grouped on/off commands, Auto brightness, and lamp status reception. CI separately compiles the Waveshare configuration using the pinned Podman image. A successful build or TX_DONE alone does not establish lamp acknowledgement or RF isolation measurements.

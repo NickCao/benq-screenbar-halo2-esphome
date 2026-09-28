@@ -7,10 +7,12 @@
 #include "esphome/components/switch/switch.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "halo2_protocol.h"
+#include "lr1121_radio.h"
+#include "lr1121_transport.h"
 
 namespace esphome::halo2 {
 
-class Halo2 : public PollingComponent {
+class Halo2 : public PollingComponent, public LR1121Transport {
  public:
   void setup() override;
   void update() override;
@@ -47,10 +49,9 @@ class Halo2 : public PollingComponent {
   void apply_received_(const halo2_protocol::HaloRxState &received);
   void publish_address_();
   bool scan_channel_();
-#ifdef USE_HALO2_LR1121
   void start_radio_();
   void recover_radio_();
-#endif
+  bool send_state_(uint8_t command, bool auto_brightness = false);
 
   struct SavedLink {
     halo2_protocol::Address address{};
@@ -80,14 +81,15 @@ class Halo2 : public PollingComponent {
   bool address_configured_{false};
   bool auto_discover_{false};
   bool discovering_{false};
-#ifdef USE_HALO2_LR1121
   enum class Transmission { NONE, COMMAND, STATUS };
+  lr1121_halo2::Radio<LR1121Transport> radio_{*this};
+  uint8_t app_pid_{0};
+  uint8_t last_pcf_{0};
   Transmission transmission_{Transmission::NONE};
   uint32_t recovery_at_{0};
   uint32_t recovery_delay_{1000};
   bool recovering_{false};
   bool scan_pending_{false};
-#endif
   halo2_protocol::HaloRxState state_;
   uint32_t frequency_deviation_{160000};
   uint8_t pulse_shape_{0x09};

@@ -1,19 +1,24 @@
+from esphome import pins
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import button, light, switch, text_sensor
+from esphome.components import button, light, spi, switch, text_sensor
 from esphome.const import (
+    CONF_BUSY_PIN,
+    CONF_DATA_RATE,
     CONF_DEFAULT_TRANSITION_LENGTH,
     CONF_GAMMA_CORRECT,
     CONF_ID,
+    CONF_IRQ_PIN,
+    CONF_RESET_PIN,
     ENTITY_CATEGORY_CONFIG,
     ENTITY_CATEGORY_DIAGNOSTIC,
 )
 
 AUTO_LOAD = ["button", "light", "switch", "text_sensor"]
-DEPENDENCIES = ["esp32"]
+DEPENDENCIES = ["esp32", "spi"]
 
 halo2_ns = cg.esphome_ns.namespace("halo2")
-Halo2 = halo2_ns.class_("Halo2", cg.PollingComponent)
+Halo2 = halo2_ns.class_("Halo2", cg.PollingComponent, spi.SPIDevice)
 Halo2Light = halo2_ns.class_("Halo2Light", light.LightOutput)
 Halo2UltrasonicSwitch = halo2_ns.class_("Halo2UltrasonicSwitch", switch.Switch)
 Halo2DiscoverButton = halo2_ns.class_("Halo2DiscoverButton", button.Button)
@@ -36,78 +41,84 @@ LIGHT_SCHEMA = light.light_schema(
 )
 
 
-def _validate_radio_options(config):
-    if config["radio"] == "BM5602":
-        for key in (
-            "auto_discover",
-            "radio_address",
-            "radio_channel",
-            "radio_address_sensor",
-            "discover_button",
-            "status_poll_interval",
-        ):
-            if key in config:
-                raise cv.Invalid(f"{key} is currently supported only with LR1121", path=[key])
-    return config
-
+BASE_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.declare_id(Halo2),
+        cv.Optional("auto_discover", default=True): cv.boolean,
+        cv.Optional("radio_address"): cv.All(
+            cv.ensure_list(cv.hex_uint8_t), cv.Length(min=4, max=4)
+        ),
+        cv.Optional("radio_channel"): cv.one_of(5, 46, 75, int=True),
+        cv.Optional("radio_address_sensor"): text_sensor.text_sensor_schema(
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        ),
+        cv.Optional("discover_button"): button.button_schema(
+            Halo2DiscoverButton, entity_category=ENTITY_CATEGORY_CONFIG,
+            icon="mdi:radar",
+        ),
+        cv.Optional("auto_button"): button.button_schema(
+            Halo2AutoButton, icon="mdi:brightness-auto",
+        ),
+        cv.Optional("status_poll_interval", default="5s"): cv.All(
+            cv.positive_time_period_milliseconds,
+            cv.Range(min=cv.TimePeriod(milliseconds=1000)),
+        ),
+        cv.Optional("command_debounce", default="1s"): cv.positive_time_period_milliseconds,
+        cv.Optional("frequency_deviation_hz", default=160000): cv.int_range(
+            min=1, max=170999
+        ),
+        cv.Optional("pulse_shape", default=0x09): cv.one_of(
+            0x00, 0x08, 0x09, 0x0A, 0x0B, int=True
+        ),
+        cv.Required("front_light"): LIGHT_SCHEMA,
+        cv.Required("back_light"): LIGHT_SCHEMA,
+        cv.Required("ultrasonic"): switch.switch_schema(
+            Halo2UltrasonicSwitch,
+            block_inverted=True,
+            default_restore_mode="RESTORE_DEFAULT_OFF",
+            icon="mdi:motion-sensor",
+        ),
+        cv.Required("radio_status"): text_sensor.text_sensor_schema(
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        ),
+    }
+).extend(cv.polling_component_schema("50ms"))
 
 CONFIG_SCHEMA = cv.All(
-    cv.Schema(
+    BASE_SCHEMA.extend(spi.spi_device_schema(cs_pin_required=True)).extend(
         {
-            cv.GenerateID(): cv.declare_id(Halo2),
-            cv.Required("radio"): cv.one_of("LR1121", "BM5602", upper=True),
-            cv.Optional("auto_discover"): cv.boolean,
-            cv.Optional("radio_address"): cv.All(
-                cv.ensure_list(cv.hex_uint8_t), cv.Length(min=4, max=4)
+            cv.Required(CONF_RESET_PIN): pins.internal_gpio_output_pin_schema,
+            cv.Required(CONF_BUSY_PIN): pins.internal_gpio_input_pin_schema,
+            cv.Required(CONF_IRQ_PIN): pins.internal_gpio_input_pin_schema,
+            # Keep the validated transfer timing and the LR1121's required mode.
+            cv.Optional(CONF_DATA_RATE, default="1MHz"): cv.All(
+                spi.SPI_DATA_RATE_SCHEMA, cv.one_of(1000000)
             ),
-            cv.Optional("radio_channel"): cv.one_of(5, 46, 75, int=True),
-            cv.Optional("radio_address_sensor"): text_sensor.text_sensor_schema(
-                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
-            ),
-            cv.Optional("discover_button"): button.button_schema(
-                Halo2DiscoverButton, entity_category=ENTITY_CATEGORY_CONFIG,
-                icon="mdi:radar",
-            ),
-            cv.Optional("auto_button"): button.button_schema(
-                Halo2AutoButton, icon="mdi:brightness-auto",
-            ),
-            cv.Optional("status_poll_interval"): cv.All(
-                cv.positive_time_period_milliseconds,
-                cv.Range(min=cv.TimePeriod(milliseconds=1000)),
-            ),
-            cv.Optional("command_debounce", default="1s"): cv.positive_time_period_milliseconds,
-            cv.Optional("frequency_deviation_hz", default=160000): cv.int_range(
-                min=1, max=170999
-            ),
-            cv.Optional("pulse_shape", default=0x09): cv.one_of(
-                0x00, 0x08, 0x09, 0x0A, 0x0B, int=True
-            ),
-            cv.Required("front_light"): LIGHT_SCHEMA,
-            cv.Required("back_light"): LIGHT_SCHEMA,
-            cv.Required("ultrasonic"): switch.switch_schema(
-                Halo2UltrasonicSwitch,
-                block_inverted=True,
-                default_restore_mode="RESTORE_DEFAULT_OFF",
-                icon="mdi:motion-sensor",
-            ),
-            cv.Required("radio_status"): text_sensor.text_sensor_schema(
-                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            cv.Optional(spi.CONF_SPI_MODE, default="MODE0"): cv.enum(
+                {"MODE0": spi.SPIMode.MODE0, 0: spi.SPIMode.MODE0, "0": spi.SPIMode.MODE0},
+                upper=True,
             ),
         }
-    ).extend(cv.polling_component_schema("50ms")),
+    ),
     cv.only_on_esp32,
-    _validate_radio_options,
+)
+
+FINAL_VALIDATE_SCHEMA = spi.final_validate_device_schema(
+    "halo2", require_mosi=True, require_miso=True
 )
 
 
 async def to_code(config):
-    cg.add_define(f"USE_HALO2_{config['radio']}")
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
+    await spi.register_spi_device(var, config)
+    cg.add(var.set_reset_pin(await cg.gpio_pin_expression(config[CONF_RESET_PIN])))
+    cg.add(var.set_busy_pin(await cg.gpio_pin_expression(config[CONF_BUSY_PIN])))
+    cg.add(var.set_irq_pin(await cg.gpio_pin_expression(config[CONF_IRQ_PIN])))
     cg.add(var.set_command_debounce(config["command_debounce"]))
     cg.add(var.set_frequency_deviation(config["frequency_deviation_hz"]))
     cg.add(var.set_pulse_shape(config["pulse_shape"]))
-    cg.add(var.set_auto_discover(config.get("auto_discover", config["radio"] == "LR1121")))
+    cg.add(var.set_auto_discover(config["auto_discover"]))
     if "radio_address" in config:
         cg.add(var.set_radio_address(cg.ArrayInitializer(*config["radio_address"])))
     if "radio_channel" in config:
@@ -125,5 +136,4 @@ async def to_code(config):
         await button.new_button(config["discover_button"], var)
     if "auto_button" in config:
         await button.new_button(config["auto_button"], var)
-    if config["radio"] == "LR1121":
-        cg.add(var.set_status_poll_interval(config.get("status_poll_interval", 5000)))
+    cg.add(var.set_status_poll_interval(config["status_poll_interval"]))

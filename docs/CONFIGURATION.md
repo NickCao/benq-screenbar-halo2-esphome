@@ -1,6 +1,6 @@
 # Configuration
 
-The root YAML files are alternative board profiles. Both include [`packages/halo2-common.yaml`](../packages/halo2-common.yaml), which loads the local [`halo2` external component](../components/halo2/), configures Wi-Fi/native API/OTA, and declares the entities.
+The Waveshare board profile, [`screenbar-halo2-lr1121.yaml`](../screenbar-halo2-lr1121.yaml), includes [`packages/halo2-common.yaml`](../packages/halo2-common.yaml), which loads the local [`halo2` external component](../components/halo2/), configures Wi-Fi/native API/OTA, and declares the entities.
 
 Preserve the directory layout when copying the project into ESPHome Builder. The component directory is self-contained; there are no root-level C++ includes to copy separately.
 
@@ -37,38 +37,40 @@ The schema is defined in [`components/halo2/__init__.py`](../components/halo2/__
 
 | Option | Meaning |
 |---|---|
-| `radio` | Required: `LR1121` or `BM5602`; set by the board profile |
+| `spi_id`, `cs_pin` | ESPHome SPI bus reference and required chip-select output pin. The bus must declare both MOSI and MISO. |
+| `reset_pin`, `busy_pin`, `irq_pin` | Required internal GPIO pins: reset output, BUSY input, and IRQ input |
+| `data_rate`, `spi_mode` | Fixed to the validated `1MHz` and `MODE0`, also used as defaults |
 | `front_light`, `back_light` | Required native light configurations; separate brightness and shared color temperature |
 | `ultrasonic` | Required switch enabling the lamp's presence mode; not an occupancy sensor |
 | `auto_button` | Optional button activating the lamp's automatic brightness adjustment; included in the common package |
 | `radio_status` | Required diagnostic text sensor |
 | `update_interval` | Receive-buffer checks and pending-command processing interval; default `50ms` |
 | `command_debounce` | Minimum gap after a command batch; changes during this interval are combined into the latest state. Default `1s`; `0s` disables it. The first request has no added delay. |
-| `status_poll_interval` | LR1121 only; interval between lamp status refresh cycles, default `5s`, minimum `1s` |
-| `auto_discover` | LR1121 only; defaults to true, starts discovery when neither an explicit nor saved link exists |
-| `radio_address` | LR1121 only; four bytes in register order, overriding the saved link at boot |
-| `radio_channel` | LR1121 only; `5`, `46`, or `75`, corresponding to 2405, 2446, or 2475 MHz; default `5` before discovery/restoration |
+| `status_poll_interval` | Interval between lamp status refresh cycles, default `5s`, minimum `1s` |
+| `auto_discover` | Defaults to true, starts discovery when neither an explicit nor saved link exists |
+| `radio_address` | Four bytes in register order, overriding the saved link at boot |
+| `radio_channel` | `5`, `46`, or `75`, corresponding to 2405, 2446, or 2475 MHz; default `5` before discovery/restoration |
 | `radio_address_sensor` | Optional LR1121 diagnostic text sensor for address and frequency |
 | `discover_button` | Optional LR1121 button that starts a fresh passive scan |
 | `frequency_deviation_hz` | LR1121 tuning; default `160000`, allowed `1..170999` |
 | `pulse_shape` | LR1121 tuning; default `0x09` (Gaussian BT=0.5); accepts `0x00`, `0x08`, `0x09`, `0x0A`, `0x0B` |
 
-The Waveshare profile includes both discovery entities. Keep its validated RF settings unless investigating a different radio variant. `frequency_deviation_hz` and `pulse_shape` do not tune the BM5602 backend.
+The Waveshare profile includes both discovery entities. Keep its validated RF settings unless investigating a different radio variant.
 
 Leave `update_interval` at 50 ms for normal use. It controls local processing, not how often status queries are transmitted. `status_poll_interval` controls those queries independently; each cycle normally uses two requests about half a second apart to discard the lamp's old queued reply before reading fresh state. Up to two extra reads drain any additional queued command replies. Replies are checked without blocking ESPHome while waiting. Faster processing or status polling increases radio work.
 
-Completed HA command batches schedule a status refresh after 500 ms. Polling pauses during pending commands, light transitions and discovery. Three consecutive failed cycles produce a **Radio status** warning and retain the last known light states; successful polling clears it. The BM5602 profile has no active status polling.
+Completed HA command batches schedule a status refresh after 500 ms. Polling pauses during pending commands, light transitions and discovery. Three consecutive failed cycles produce a **Radio status** warning and retain the last known light states; successful polling clears it.
 
-`command_debounce` applies to both profiles. The first request is handled on the next `update_interval` tick when the radio is available. Requests arriving during the cooldown are combined and sent when it expires; they do not restart the timer. The required settings-plus-power sequence remains one batch. For example:
+The first request is handled on the next `update_interval` tick when the radio is available. Requests arriving during the cooldown are combined and sent when it expires; they do not restart the timer. The required settings-plus-power sequence remains one batch. For example:
 
 ```yaml
 halo2:
   command_debounce: 1s
 ```
 
-LR1121 reset, BUSY, transmit completion and receive processing run asynchronously. A low-level radio error triggers retries after 1, 2, 4, 8, 16, then 30 seconds, capped at 30 seconds until initialization succeeds. Only the radio resets; the learned address, Wi-Fi and native API are retained. Incomplete commands are discarded and actual lamp status is queried after recovery. These changes do not replace the legacy BM5602 driver's synchronous timing.
+LR1121 reset, BUSY, transmit completion and receive processing run asynchronously. A low-level radio error triggers retries after 1, 2, 4, 8, 16, then 30 seconds, capped at 30 seconds until initialization succeeds. Only the radio resets; the learned address, Wi-Fi and native API are retained. Incomplete commands are discarded and actual lamp status is queried after recovery.
 
-The component currently supports one radio/bridge instance per device and uses the fixed board pins described in [wiring](WIRING.md).
+The component currently supports one radio/bridge instance per device. LR1121 wiring is configured in the board YAML. See [wiring](WIRING.md).
 
 ## Light defaults and state
 
@@ -88,7 +90,6 @@ Automatic discovery is the usual setup. If you already know a link, add its addr
 
 ```yaml
 halo2:
-  radio: LR1121
   auto_discover: false
   radio_address: [0x9C, 0xEA, 0xBB, 0x86]
   radio_channel: 5
@@ -97,12 +98,6 @@ halo2:
 The address is in **register order**, the same order shown by **Radio address**. Its bytes are reversed for the on-air address. Operate the original controller after configuration so the bridge can learn the current settings and the packet-option byte used by the lamp.
 
 An explicit address takes precedence over preferences at boot. Remove `radio_address` and allow discovery if you want a newly learned link to be reused automatically. With `auto_discover: false` and no explicit or saved link, the implementation falls back to its compile-time reference address; that is not a universal lamp address.
-
-## BM5602 address
-
-The legacy backend uses `RADIO_ADDRESS` and `RADIO_CHANNEL` in [`components/halo2/halo2_protocol.h`](../components/halo2/halo2_protocol.h). The reference values are `9C EA BB 86` in register order and channel `5`. Use values captured from your own controller/lamp pair before compiling.
-
-The YAML discovery/address options are rejected for `BM5602`. Editing the shared defaults also changes the LR1121 fallback, but not an explicit or restored LR1121 link.
 
 ## Optional dashboard
 
@@ -127,4 +122,6 @@ For a combined control, create a Light group helper containing Front lamp and Ba
 
 Keep the device and light names to retain their HA identities. HA refreshes the native API entity list on reconnect. Remove manually configured dashboard cards or automations that reference the retired master Power switch or old REST helpers.
 
-The radio headers now live under `components/halo2/`; remove old `esphome.includes` entries from customized configurations and copy the complete component directory. The root board profile names are unchanged.
+The radio headers live under `components/halo2/`; remove old `esphome.includes` entries from customized configurations and copy the complete component directory. The Waveshare profile remains `screenbar-halo2-lr1121.yaml`.
+
+Customized configurations also need the `spi:` bus and `spi_id`, `cs_pin`, `reset_pin`, `busy_pin`, and `irq_pin` settings from the current Waveshare profile. Pin assignments are no longer compiled into the LR1121 transport. Remove `halo2.radio`; the component now supports LR1121 exclusively.
