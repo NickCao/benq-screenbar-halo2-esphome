@@ -67,6 +67,7 @@ class StatusPoll {
   static constexpr uint8_t MAX_READ_ATTEMPTS = 3, FAILURE_THRESHOLD = 3;
 
   bool idle() const { return phase_ == Phase::IDLE; }
+  bool transmitting() const { return phase_ == Phase::REFRESH_TX || phase_ == Phase::READ_TX; }
   bool waiting_reply() const { return phase_ == Phase::REFRESH_REPLY || phase_ == Phase::READ_REPLY; }
   bool reading() const {
     return phase_ == Phase::READ_DELAY || phase_ == Phase::READ_TX || phase_ == Phase::READ_REPLY;

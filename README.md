@@ -115,7 +115,7 @@ Upload updates and view logs with:
 | [`packages/halo2-common.yaml`](packages/halo2-common.yaml) | Networking, native API, entities, and common defaults |
 | [`screenbar-halo2-lr1121.yaml`](screenbar-halo2-lr1121.yaml) | Waveshare board configuration and radio wiring |
 | [`scripts/esphome`](scripts/esphome) | Podman wrapper used locally and by CI |
-| [`scripts/test`](scripts/test), [`tests/`](tests/) | Native lamp, lifecycle, and polling state tests |
+| [`scripts/test`](scripts/test), [`tests/`](tests/) | Native lamp, command queue, lifecycle, and polling tests |
 | [`tests/hardware/`](tests/hardware/) | Opt-in pytest checks against a deployed bridge and lamp |
 | [`secrets.example.yaml`](secrets.example.yaml) | Credential template |
 | [`home-assistant/dashboard.yaml`](home-assistant/dashboard.yaml) | Optional HA dashboard |

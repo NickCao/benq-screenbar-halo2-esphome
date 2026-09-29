@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from time import monotonic
 
 from aioesphomeapi import APIClient
-from aioesphomeapi.model import LightInfo, LogLevel, SelectInfo
+from aioesphomeapi.model import ButtonInfo, LightInfo, LogLevel, SelectInfo
 
 LOGGER = logging.getLogger(__name__)
 STATUS_PATTERN = re.compile(
@@ -79,11 +79,14 @@ class Lamp:
             raise AssertionError(f"Expected one {kind.__name__} named {name!r}; found {len(matches)}")
         return matches[0]
 
-    def light(self, name, **values):
-        self.api.light_command(self.entity(name, LightInfo).key, transition_length=0, **values)
+    def light(self, name, *, transition_length=0, **values):
+        self.api.light_command(self.entity(name, LightInfo).key, transition_length=transition_length, **values)
 
     def select(self, option):
         self.api.select_command(self.entity("Ultrasonic sensor", SelectInfo).key, option)
+
+    def button(self, name):
+        self.api.button_command(self.entity(name, ButtonInfo).key)
 
     async def wait_readback(self, since, *, wait_timeout=25, **expected):
         """Wait for a lamp observation made after the commands, allowing RF retries."""

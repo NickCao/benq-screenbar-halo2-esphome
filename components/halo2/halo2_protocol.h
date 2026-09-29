@@ -9,6 +9,8 @@
 
 // Canonical payload representation and the LR1121's 9-bit PCF on-air format.
 namespace halo2_protocol {
+using esphome::halo2::Command;
+using enum esphome::halo2::Command;
 using esphome::halo2::LampSelection;
 using esphome::halo2::LampState;
 using esphome::halo2::UltrasonicTimeout;
@@ -18,9 +20,7 @@ constexpr std::array<uint8_t, 3> RADIO_CHANNELS{5, 46, 75};
 constexpr uint8_t RADIO_CHANNEL = RADIO_CHANNELS[0];
 constexpr unsigned RADIO_BASE_FREQUENCY_MHZ = 2400;
 
-// The controller also sends 0x05 when going to sleep; it saves the timeout.
-enum Command : uint8_t { POWER = 0x02, SETTINGS = 0x03, STATUS = 0x04, ULTRASONIC_TIMEOUT = 0x05 };
-constexpr uint8_t MAX_COMMAND_CODE = 0x05;
+constexpr uint8_t MAX_COMMAND_CODE = Command::ULTRASONIC_TIMEOUT;
 constexpr uint8_t PCF_NO_ACK = 0x01, PCF_PID_MASK = 0x06, PCF_PID_SHIFT = 1, PCF_LENGTH_SHIFT = 3;
 constexpr uint8_t PACKET_SUFFIX = 0x02;
 constexpr uint16_t CRC_INITIAL = 0xFFFF, CRC_POLYNOMIAL = 0x1021, CRC_TOP_BIT = 0x8000;

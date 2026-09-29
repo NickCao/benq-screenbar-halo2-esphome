@@ -8,8 +8,10 @@ The bridge follows the [ESPHome external-component layout](https://esphome.io/co
 |---|---|
 | `__init__.py` | Configuration validation, entity creation, SPI registration, and GPIO code generation |
 | `lamp_state.h` | Lamp settings, section/brightness rules, and requested versus observed state; independent of ESPHome and radio metadata |
+| `command_queue.h` | Changed settings to command batches, coalescing, Auto brightness intent, TX completion, and cooldown; independent of ESPHome |
 | `bridge_state.h` | Lifecycle and status-poll state machines plus a scoped publication guard; independent of ESPHome |
-| `halo2.h`, `halo2.cpp` | Native entity adapters, command batching, status polling, preference storage, and discovery coordination |
+| `halo2_light.cpp` | ESPHome light conversion, preference restoration, publication, and transition handling |
+| `halo2.h`, `halo2.cpp` | Component wiring, event routing, radio I/O, preference storage, and discovery coordination |
 | `halo2_protocol.h` | Packed payload/frame structs, CRC, canonical/air-frame conversion, validation, and address extraction; uses ESPHome's CRC, byte-order, and bit-casting helpers |
 | `lr1121_radio.h` | LR1121 command/packet handling using ESPHome `SPIDevice` and GPIO |
 
@@ -20,6 +22,8 @@ The [protocol reference](PROTOCOL.md) documents the wire format, capture evidenc
 ## HA state and radio commands
 
 `LampState` contains global power, a front/back selection enum, two brightness values, shared temperature, presence-mode enable, and inactivity timeout. `LampStateModel` keeps requested settings for outgoing commands and the optimistic UI, plus an optional observation from the last accepted fresh lamp status reply. HA commands and received controller requests update requested settings without changing that observation. Accepted status replies update both, reconciling requests with the lamp. A matching reply records an observation even when it does not require a UI update.
+
+Brightness readback reconciles selected sections. Unselected sections ignore brightness settings on the wire, so their requested brightness is retained for the next ON; the observation still records the lamp's raw stored level. The first baseline after boot or recovery and original-controller snapshots use all received brightness values.
 
 Packet command, PCF, and request/reply direction belong to `ReceivedPacket`, alongside its decoded `LampState`. Decoder success is reported by its return value; initialization belongs to the state model. Packet metadata cannot become part of requested lamp settings.
 
@@ -32,7 +36,9 @@ Packet command, PCF, and request/reply direction belong to `ReceivedPacket`, alo
 
 There is no master Power entity. Turning one section off while the other remains on changes selection. Turning off the last section requires global power OFF. `LampState::set_light()` centralizes these rules and retains each section's last nonzero brightness. The light adapter also restores that brightness to ESPHome after an immediate zero-brightness OFF request, so a following plain ON uses the retained value.
 
-Each light adapter identifies its entity with `Section::FRONT` or `Section::BACK`; the bridge owns the corresponding light states. Light and ultrasonic controls pass their updated settings through `request_state_()`, which compares them with the previous request and queues the required command types in one place.
+Each light adapter identifies its entity with `Section::FRONT` or `Section::BACK` and owns its ESPHome state pointer and publication guard. It translates framework values into lamp settings and projects received settings back into the entity. The bridge works with those settings rather than reading ESPHome's current and remote values itself.
+
+Light and ultrasonic controls pass their updated settings through `request_state_()`. It gives the before/after settings to `CommandQueue`, then updates requested state and preferences. The queue determines which operations are required; the radio path takes a batch and sends its commands without deciding their meaning or order.
 
 Color temperature is one logical setting and is mirrored between the two light entities. The payload contains two temperature fields; the bridge writes the same value to both. Behavior with unequal outgoing temperature fields has not been characterized.
 
@@ -40,25 +46,29 @@ Commands arriving before the next 50 ms update are combined into the shared stat
 
 - `0x03` applies mode, brightness, temperature, and presence settings; it does not change global power.
 - `0x02` explicitly changes global power and is processed before other pending commands.
-- When sending ON, the bridge first sends `0x03` with the final settings, then `0x02`, consuming any pending settings request. OFF uses `0x02`; separately requested settings remain pending because power-off does not apply the presence-enable bit.
+- When sending ON, the queue plans `0x03` with the final settings, then `0x02`, consuming any pending settings request. OFF uses `0x02`; every changed setting remains pending for a later `0x03`, because power-off does not apply those fields.
 - `0x05` saves the inactivity timeout. It remains pending through power/settings commands and runs after them, respecting the same cooldown.
 - Auto brightness queues `0x03` with control bit 1 set. A subsequent manual brightness or temperature change cancels a pending Auto request.
 
-Pending command types are held in a fixed bitset. Repeated requests of the same type coalesce into the latest shared state, while distinct required operations cannot overwrite one another. A combined power-off, presence-disable, and timeout change therefore sends `0x02`, `0x03`, then `0x05` in separate batches.
+`CommandQueue` holds pending command types in a fixed bitset and owns its ready, transmitting, and cooldown phases. Taking a batch reserves the transmitter; its cooldown begins at TX_DONE. Repeated requests of the same type coalesce into the latest shared state, while distinct required operations cannot overwrite one another. A combined power-off, presence-disable, and timeout change therefore sends `0x02`, `0x03`, then `0x05` in separate batches. New requests during transmission remain pending for the next batch.
 
 The ultrasonic select maps Disabled to a cleared presence bit, preserving the timeout. Its other four options enable presence and select the corresponding duration. Changing enable queues settings; changing duration queues the timeout command. Received state maps both fields back to the same select.
 
-This ordering makes consecutive front/back commands from HA's group or “all lights” controls work in either arrival order. The diagnostic **Resend current state** button uses the same power-aware sequence.
+This ordering makes consecutive front/back commands from HA's group or “all lights” controls work in either arrival order. The diagnostic **Resend current state** button queues power, settings, and timeout, including settings and timeout while the lamp is off.
 
 LR1121 queues the complete one- or two-packet batch before starting it. **Command sent** is published and the cooldown starts only after every packet reports TX_DONE. New HA requests can update the pending state while that batch is in flight. Received frames cannot overwrite pending commands.
 
-Received controller state is published under a scoped guard that prevents the resulting light callbacks from queuing another transmission. Shared-temperature synchronization uses the same guard. Nested guards restore their previous value when leaving scope. Publication does not change the lifecycle state. The light adapter also tracks whether a deferred write originated locally, so an incoming radio update is not echoed later.
+Each light adapter publishes received state under its own scoped guard, preventing the resulting callbacks from submitting another request. Shared-temperature synchronization uses the same guarded entity operation. The bridge reads the peer's final values after mirroring and merges them into one request; it does not re-enter the peer's control handler. Nested guards restore their previous value when leaving scope. Publication does not change the lifecycle state. The light adapter also tracks whether a deferred write originated locally, so an incoming radio update is not echoed later.
+
+Polling also checks for divergent ESPHome current and remote values, covering a newly requested fade before ESPHome sets its transformer-active flag on the first loop.
 
 At boot, light preferences and the saved selection restore requested settings without sending settings or power commands. The saved radio link includes address, channel, and timeout; the timeout occupies the former packet-options byte, preserving preference version 2's eight-byte layout. Local controls require a valid received state after boot or recovery, so UI defaults cannot overwrite the sensor's actual configuration. Recovery and starting discovery invalidate the received baseline and observation while retaining requested settings for display. Unchanged status replies do not republish entities.
 
 ## LR1121 scheduling and recovery
 
 `BridgeLifecycle` owns command eligibility. Initialization leads to `AWAITING_STATE` for a known link or `DISCOVERING` for a new link. A valid received baseline or completed discovery leads to `ACTIVE`, the only state accepting local commands. Failure enters recovery; retries initialize the radio and require a new baseline. Initialization and recovery each have a discovery variant, so an interrupted scan resumes scanning while a learned link resumes normal reception. Discovery channel changes, listening, and dwell expiry also use explicit phases.
+
+The component loop advances the driver, handles readiness and TX completion, then dispatches discovery or normal reception. Normal processing gives pending commands priority, then receives a packet and services status polling. Command and status-poll state machines identify the owner of each TX_DONE; the component has no separate transmission flag.
 
 The driver advances up to four SPI transactions per ESPHome loop call. Reset pulse timing, startup, BUSY waits, calibration, TX completion, RX reads and rearming all use timed states. Individual SPI transfers remain synchronous and bounded to 32 bytes at 1 MHz; the only explicit delay is one microsecond for NSS-to-BUSY propagation. The component keeps its loop enabled to service the radio, checking commands and received frames every 50 ms. ESPHome's `PollingComponent` schedules periodic lamp status queries independently, while named scheduler timeouts handle recovery retries and discovery dwell periods.
 
@@ -106,8 +116,8 @@ The [protocol reference](PROTOCOL.md#framing-and-packet-control-field) is the so
 
 **Command sent** means the radio completed transmission and reported TX_DONE, not that a visible lamp change was confirmed. **Lamp status received** means a refresh/read polling cycle returned validated lamp state.
 
-The opt-in [pytest hardware suite](../tests/hardware/) sends native API commands and checks fresh lamp readback in DEBUG logs. It covers independent brightness, shared temperature, grouped on/off in both arrival orders, section selection, zero-brightness OFF followed by plain ON, combined power/presence/timeout changes, and all ultrasonic timeout options. It also checks HA entity values for retained brightness and shared temperature. These tests operate the lamp and require an explicit `--halo2-device`; ordinary test runs skip them.
+The opt-in [pytest hardware suite](../tests/hardware/) sends native API commands and checks fresh lamp readback in DEBUG logs. It covers independent brightness, shared temperature during a peer fade, grouped on/off in both arrival orders, section selection, zero-brightness OFF followed by plain ON, combined power/presence/timeout changes, full resend while off, and all ultrasonic timeout options. It also checks HA entity values for retained brightness and shared temperature. These tests operate the lamp and require an explicit `--halo2-device`; ordinary test runs skip them.
 
 The original controller sends settings snapshots, so a later valid request can recover missed updates. LR1121 polling also catches autonomous presence changes, Auto brightness adjustments, and missed requests. Collisions, range, or a disconnected lamp can delay synchronization; polling retains the last known state until a reply arrives.
 
-The Waveshare implementation has been exercised on hardware for discovery, saved-link restoration, native API control, front/back operation, grouped on/off commands, Auto brightness, lamp status reception, and all ultrasonic select options. Combined power/settings/timeout requests were verified by lamp readback. The [protocol evidence and limitations](PROTOCOL.md#capture-evidence-2026-09-28) distinguish these checks from physical inactivity timing and other untested behavior. Native tests cover the lamp state model's grouped commands, brightness retention, request/observation separation, readback reconciliation, and recovery, plus lifecycle gating, discovery recovery, nested publication, polling freshness, retries, cancellation, and clock wraparound. CI runs those tests and compiles the Waveshare configuration using the pinned Podman image. A successful build or TX_DONE alone does not establish lamp acknowledgement or RF isolation measurements.
+The Waveshare implementation has been exercised on hardware for discovery, saved-link restoration, native API control, front/back operation, grouped on/off commands, Auto brightness, lamp status reception, and all ultrasonic select options. Combined power/settings/timeout requests were verified by lamp readback. The [protocol evidence and limitations](PROTOCOL.md#capture-evidence-2026-09-28) distinguish these checks from physical inactivity timing and other untested behavior. Native tests cover the lamp state model's grouped commands, brightness retention, request/observation separation, readback reconciliation, and recovery; command batches, coalescing, in-flight requests, Auto cancellation, resend, cooldown, and reset; and lifecycle gating, discovery recovery, nested publication, polling freshness, retries, cancellation, and clock wraparound. CI runs those tests and compiles the Waveshare configuration using the pinned Podman image. A successful build or TX_DONE alone does not establish lamp acknowledgement or RF isolation measurements.

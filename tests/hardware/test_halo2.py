@@ -1,4 +1,5 @@
 import asyncio
+import re
 from time import monotonic
 
 import pytest
@@ -16,6 +17,31 @@ async def test_independent_brightness_and_shared_temperature(lamp):
     )
     for name in ("Front lamp", "Back lamp"):
         await lamp.wait_light_state(name, color_temperature=1_000_000 / 4500)
+
+
+@pytest.mark.parametrize("on,brightness", [(False, .62), (True, .20)], ids=["off", "dim"])
+async def test_shared_temperature_reconciles_a_peer_fade(lamp, on, brightness):
+    lamp.light("Back lamp", state=on, brightness=brightness, transition_length=2)
+    await asyncio.sleep(.25)
+    since = monotonic()
+    lamp.light("Front lamp", color_temperature=1_000_000 / 4725)
+    await lamp.wait_readback(
+        since, power=True, front=True, back=on, front_brightness=37,
+        temperature=4725, **({"back_brightness": round(brightness * 100)} if on else {}),
+    )
+    await lamp.wait_light_state(
+        "Back lamp", state=on, brightness=brightness, color_temperature=1_000_000 / 4725,
+    )
+    if not on:
+        # Unselected sections ignore the packet's brightness. A plain ON
+        # must still apply the retained level after receiving that readback.
+        since = monotonic()
+        lamp.light("Back lamp", state=True)
+        await lamp.wait_readback(since, back=True, back_brightness=62, temperature=4725)
+
+    since = monotonic()
+    lamp.light("Back lamp", state=True, brightness=.62, color_temperature=1_000_000 / 4500)
+    await lamp.wait_readback(since, power=True, front=True, back=True, back_brightness=62, temperature=4500)
 
 
 @pytest.mark.parametrize("first,second", [("Front lamp", "Back lamp"), ("Back lamp", "Front lamp")])
@@ -84,3 +110,21 @@ async def test_presence_timeout_and_disable_retention(lamp, minutes):
         lamp.select("Disabled")
         disabled = await lamp.wait_readback(since, ultrasonic=False)
     assert disabled.timeout == minutes
+
+
+async def test_resend_while_off_reapplies_settings_and_timeout(lamp):
+    since = monotonic()
+    lamp.light("Front lamp", state=False)
+    lamp.light("Back lamp", state=False)
+    await lamp.wait_readback(since, power=False)
+
+    lamp.radio_messages.clear()
+    since = monotonic()
+    lamp.button("Resend current state")
+    await lamp.wait_readback(
+        since, power=False, front_brightness=37, back_brightness=62,
+        temperature=4500, ultrasonic=False, timeout=3,
+    )
+    commands = [match.group(1) for message in lamp.radio_messages
+                if (match := re.search(r"TX command 0x(02|03|05)", message))]
+    assert commands == ["02", "03", "05"]

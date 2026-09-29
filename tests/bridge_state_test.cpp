@@ -67,8 +67,10 @@ static void replies_must_follow_refresh_and_match_the_current_request() {
   poll.schedule(0, 500);
   assert(!poll.due(499) && poll.due(500));
   assert(poll.begin_request(0));
+  assert(poll.transmitting());
   assert(!poll.waiting_reply() && !poll.expire(10000));
   assert(poll.on_tx_done(10000));
+  assert(!poll.transmitting());
   assert(poll.on_reply(2, true, 10010) == StatusPoll::Reply::IGNORED);
   assert(poll.on_reply(0, true, 10010) == StatusPoll::Reply::NEEDS_READ);
   assert(!poll.waiting_reply() && !poll.due(10509));

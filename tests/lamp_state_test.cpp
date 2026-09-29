@@ -118,6 +118,37 @@ static void zero_brightness_preserves_levels_and_selection() {
   CHECK(state.back_brightness == 70);
 }
 
+static void inactive_brightness_intent_survives_readback_until_the_next_on() {
+  for (auto section : {Section::FRONT, Section::BACK}) {
+    LampStateModel model;
+    const auto baseline = initial_state();
+    model.observe(baseline);
+    auto requested = baseline;
+    requested.set_light(section, false, baseline.brightness(section));
+    model.request(requested);
+    auto actual = requested;
+    actual.set_brightness(section, 1);  // Last transmitted fade sample.
+    CHECK(!model.observe(actual));
+    CHECK(model.observed() == actual);
+    CHECK(model.requested() == requested);
+
+    requested.set_light(section, true, requested.brightness(section));
+    model.request(requested);
+    actual = requested;
+    actual.set_brightness(section, 10);  // A selected section must reconcile.
+    CHECK(model.observe(actual));
+    CHECK(model.requested() == actual);
+
+    actual.set_light(section, false, 25);
+    CHECK(model.receive_request(actual));  // Trust the controller snapshot.
+    CHECK(model.requested() == actual);
+    model.invalidate();
+    actual.set_brightness(section, 30);
+    CHECK(model.observe(actual));  // Recovery establishes a fresh baseline.
+    CHECK(model.requested() == actual);
+  }
+}
+
 static void grouped_commands_work_in_either_order() {
   for (auto selection : {LampSelection::FRONT_ONLY, LampSelection::BACK_ONLY, LampSelection::BOTH}) {
     for (bool power : {false, true}) {
@@ -190,6 +221,7 @@ int main() {
   first_confirmation_records_unchanged_settings();
   lamp_readback_reconciles_a_failed_request();
   zero_brightness_preserves_levels_and_selection();
+  inactive_brightness_intent_survives_readback_until_the_next_on();
   grouped_commands_work_in_either_order();
   brightness_changes_preserve_the_other_section();
   recovery_retains_requests_but_requires_a_new_baseline();
