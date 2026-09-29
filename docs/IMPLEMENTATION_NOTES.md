@@ -32,6 +32,8 @@ Packet command, PCF, and request/reply direction belong to `ReceivedPacket`, alo
 
 There is no master Power entity. Turning one section off while the other remains on changes selection. Turning off the last section requires global power OFF. `LampState::set_light()` centralizes these rules and retains each section's last nonzero brightness. The light adapter also restores that brightness to ESPHome after an immediate zero-brightness OFF request, so a following plain ON uses the retained value.
 
+Each light adapter identifies its entity with `Section::FRONT` or `Section::BACK`; the bridge owns the corresponding light states. Light and ultrasonic controls pass their updated settings through `request_state_()`, which compares them with the previous request and queues the required command types in one place.
+
 Color temperature is one logical setting and is mirrored between the two light entities. The payload contains two temperature fields; the bridge writes the same value to both. Behavior with unequal outgoing temperature fields has not been characterized.
 
 Commands arriving before the next 50 ms update are combined into the shared state. The first command is eligible immediately. Following a completed command batch, `command_debounce` imposes a one-second default cooldown; further requests are combined and the next required command uses the latest state when that fixed interval expires:
@@ -104,7 +106,7 @@ The [protocol reference](PROTOCOL.md#framing-and-packet-control-field) is the so
 
 **Command sent** means the radio completed transmission and reported TX_DONE, not that a visible lamp change was confirmed. **Lamp status received** means a refresh/read polling cycle returned validated lamp state.
 
-The opt-in [pytest hardware suite](../tests/hardware/) sends native API commands and checks fresh lamp readback in DEBUG logs. It covers independent brightness, shared temperature, grouped on/off in both arrival orders, section selection, zero-brightness OFF followed by plain ON, and all ultrasonic timeout options. It also checks HA entity values for retained brightness and shared temperature. These tests operate the lamp and require an explicit `--halo2-device`; ordinary test runs skip them.
+The opt-in [pytest hardware suite](../tests/hardware/) sends native API commands and checks fresh lamp readback in DEBUG logs. It covers independent brightness, shared temperature, grouped on/off in both arrival orders, section selection, zero-brightness OFF followed by plain ON, combined power/presence/timeout changes, and all ultrasonic timeout options. It also checks HA entity values for retained brightness and shared temperature. These tests operate the lamp and require an explicit `--halo2-device`; ordinary test runs skip them.
 
 The original controller sends settings snapshots, so a later valid request can recover missed updates. LR1121 polling also catches autonomous presence changes, Auto brightness adjustments, and missed requests. Collisions, range, or a disconnected lamp can delay synchronization; polling retains the last known state until a reply arrives.
 

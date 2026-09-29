@@ -6,7 +6,6 @@
 namespace esphome::halo2 {
 
 class BridgeLifecycle {
- public:
   enum class Phase {
     INITIALIZING,
     INITIALIZING_DISCOVERY,
@@ -17,9 +16,9 @@ class BridgeLifecycle {
     RECOVERING_DISCOVERY,
   };
 
+ public:
   explicit BridgeLifecycle(bool discover = false)
       : phase_(discover ? Phase::INITIALIZING_DISCOVERY : Phase::INITIALIZING) {}
-  Phase phase() const { return phase_; }
   bool active() const { return phase_ == Phase::ACTIVE; }
   bool linked() const { return phase_ == Phase::AWAITING_STATE || active(); }
   bool discovering() const { return phase_ == Phase::DISCOVERING; }
@@ -60,13 +59,13 @@ class BridgeLifecycle {
 // first matching ACK refreshes the lamp's queued state; only a later STATUS
 // reply is publishable. Deadlines start at TX_DONE, never at queueing.
 class StatusPoll {
- public:
   enum class Phase { IDLE, REFRESH_DELAY, REFRESH_TX, REFRESH_REPLY, READ_DELAY, READ_TX, READ_REPLY };
+
+ public:
   enum class Reply { IGNORED, NEEDS_READ, STATE };
   static constexpr uint32_t SETTLE_MS = 500, REPLY_TIMEOUT_MS = 200;
   static constexpr uint8_t MAX_READ_ATTEMPTS = 3, FAILURE_THRESHOLD = 3;
 
-  Phase phase() const { return phase_; }
   bool idle() const { return phase_ == Phase::IDLE; }
   bool waiting_reply() const { return phase_ == Phase::REFRESH_REPLY || phase_ == Phase::READ_REPLY; }
   bool reading() const {

@@ -21,6 +21,7 @@ DEPENDENCIES = ["esp32", "spi"]
 halo2_ns = cg.esphome_ns.namespace("halo2")
 Halo2 = halo2_ns.class_("Halo2", cg.PollingComponent)
 Halo2Light = halo2_ns.class_("Halo2Light", light.LightOutput)
+Section = halo2_ns.enum("Section", is_class=True)
 Halo2UltrasonicSelect = halo2_ns.class_("Halo2UltrasonicSelect", select.Select)
 Halo2DiscoverButton = halo2_ns.class_("Halo2DiscoverButton", button.Button)
 Halo2AutoButton = halo2_ns.class_("Halo2AutoButton", button.Button)
@@ -128,8 +129,8 @@ async def to_code(config):
         cg.add(var.set_radio_address(cg.ArrayInitializer(*config["radio_address"])))
     if "radio_channel" in config:
         cg.add(var.set_radio_channel(config["radio_channel"]))
-    await light.new_light(config["front_light"], var, True)
-    await light.new_light(config["back_light"], var, False)
+    await light.new_light(config["front_light"], var, Section.FRONT)
+    await light.new_light(config["back_light"], var, Section.BACK)
     ultrasonic = await select.new_select(
         config["ultrasonic"], var,
         options=["Disabled", "3 minutes", "5 minutes", "10 minutes", "15 minutes"],

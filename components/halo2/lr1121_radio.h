@@ -40,7 +40,6 @@ class LR1121Radio : public spi::SPIDevice<spi::BIT_ORDER_MSB_FIRST, spi::CLOCK_P
   uint16_t firmware_version() const { return firmware_version_; }
   const halo2_protocol::Address &address() const { return address_; }
   uint8_t channel() const { return channel_; }
-  bool discovering() const { return discovering_; }
   uint32_t capture_count() const { return capture_count_; }
   uint32_t rx_count() const { return rx_count_; }
   uint32_t last_irq() const { return last_irq_; }

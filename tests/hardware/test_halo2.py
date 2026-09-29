@@ -56,6 +56,23 @@ async def test_zero_brightness_then_plain_on(lamp, wait_for_off):
     await lamp.wait_light_state("Front lamp", state=True, brightness=.37)
 
 
+async def test_combined_power_presence_and_timeout_changes(lamp):
+    since = monotonic()
+    lamp.light("Front lamp", state=False)
+    lamp.light("Back lamp", state=False)
+    lamp.select("10 minutes")
+    await lamp.wait_readback(since, power=False, ultrasonic=True, timeout=10)
+
+    since = monotonic()
+    lamp.light("Back lamp", state=True)
+    lamp.light("Front lamp", state=True)
+    lamp.select("Disabled")
+    await lamp.wait_readback(
+        since, power=True, front=True, back=True, front_brightness=37,
+        back_brightness=62, ultrasonic=False, timeout=10,
+    )
+
+
 @pytest.mark.parametrize("minutes", [5, 10, 15, 3])
 async def test_presence_timeout_and_disable_retention(lamp, minutes):
     try:

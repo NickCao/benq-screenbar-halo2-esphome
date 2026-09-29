@@ -25,7 +25,7 @@ class Halo2 : public PollingComponent {
   LR1121Radio &get_radio() { return radio_; }
   void set_frequency_deviation(uint32_t value) { frequency_deviation_ = value; }
   void set_pulse_shape(uint8_t value) { pulse_shape_ = value; }
-  void set_light(light::LightState *value, bool front) { (front ? front_light_ : back_light_) = value; }
+  void set_light(light::LightState *value, Section section) { lights_[static_cast<size_t>(section)] = value; }
   void set_ultrasonic_select(select::Select *value) { ultrasonic_select_ = value; }
   void set_radio_status(text_sensor::TextSensor *value) { radio_status_ = value; }
   void set_radio_address_sensor(text_sensor::TextSensor *value) { radio_address_sensor_ = value; }
@@ -41,10 +41,10 @@ class Halo2 : public PollingComponent {
   void start_auto_brightness();
 
   bool accepts_commands() const { return lifecycle_.active() && !publishing_; }
-  void control_light(light::LightState *light, bool front);
+  void control_light(Section section);
   void control_ultrasonic(size_t index);
   void resend() {
-    if (accepts_commands()) queue_command_(halo2_protocol::Command::POWER);
+    if (accepts_commands()) pending_commands_.set(halo2_protocol::Command::POWER);
   }
 
  protected:
@@ -52,19 +52,20 @@ class Halo2 : public PollingComponent {
   enum SavedMode : uint8_t { NONE = 0, FRONT = 1, BACK = 2, BOTH = FRONT | BACK };
   static constexpr uint32_t RECOVERY_INITIAL_DELAY_MS = 1000;
 
-  void queue_command_(halo2_protocol::Command command);
+  void request_state_(const LampState &requested);
+  bool lights_transitioning_() const {
+    return lights_[0]->is_transformer_active() || lights_[1]->is_transformer_active();
+  }
   void publish_lights_();
   void publish_ultrasonic_();
-  void publish_light_(light::LightState *light, bool front);
-  void synchronize_temperature_(light::LightState *source);
+  void publish_light_(Section section);
+  void synchronize_temperature_(Section source);
   void publish_status_(const char *status);
   void save_mode_();
-  void apply_received_(const halo2_protocol::ReceivedPacket &received);
+  bool apply_received_(const halo2_protocol::ReceivedPacket &received);
   void publish_address_();
   bool scan_channel_();
   void process_radio_();
-  void schedule_status_poll_(uint32_t delay);
-  void cancel_status_poll_();
   void start_radio_();
   void recover_radio_();
   bool send_state_(uint8_t command, bool auto_brightness = false);
@@ -84,8 +85,7 @@ class Halo2 : public PollingComponent {
     uint8_t count{0};
   };
 
-  light::LightState *front_light_{nullptr};
-  light::LightState *back_light_{nullptr};
+  std::array<light::LightState *, 2> lights_{};
   select::Select *ultrasonic_select_{nullptr};
   text_sensor::TextSensor *radio_status_{nullptr};
   text_sensor::TextSensor *radio_address_sensor_{nullptr};
@@ -123,24 +123,24 @@ class Halo2 : public PollingComponent {
 
 class Halo2Light : public light::LightOutput, public Parented<Halo2> {
  public:
-  Halo2Light(Halo2 *parent, bool front) : Parented<Halo2>(parent), front_(front) {}
+  Halo2Light(Halo2 *parent, Section section) : Parented<Halo2>(parent), section_(section) {}
   light::LightTraits get_traits() override;
-  void setup_state(light::LightState *state) override { parent_->set_light(state, front_); }
-  void update_state(light::LightState *state) override {
+  void setup_state(light::LightState *state) override { parent_->set_light(state, section_); }
+  void update_state(light::LightState *) override {
     // Capture local commands immediately, before polling can receive a packet.
     // The guard also prevents received state from becoming a new transmission.
     forward_update_ = parent_->accepts_commands();
-    if (forward_update_) parent_->control_light(state, front_);
+    if (forward_update_) parent_->control_light(section_);
   }
-  void write_state(light::LightState *state) override {
+  void write_state(light::LightState *) override {
     // ESPHome installs the final transition values after update_state().
     // Reconcile those here, retaining the origin of the deferred write.
-    if (forward_update_) parent_->control_light(state, front_);
+    if (forward_update_) parent_->control_light(section_);
     forward_update_ = false;
   }
 
  protected:
-  bool front_;
+  Section section_;
   bool forward_update_{false};
 };
 
