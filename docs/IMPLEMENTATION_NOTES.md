@@ -8,6 +8,7 @@ The bridge follows the [ESPHome external-component layout](https://esphome.io/co
 |---|---|
 | `__init__.py` | Configuration validation, entity creation, SPI registration, and GPIO code generation |
 | `lamp_state.h` | Lamp settings, section/brightness rules, and requested versus observed state; independent of ESPHome and radio metadata |
+| `bridge_state.h` | Lifecycle and status-poll state machines plus a scoped publication guard; independent of ESPHome |
 | `halo2.h`, `halo2.cpp` | Native entity adapters, command batching, status polling, preference storage, and discovery coordination |
 | `halo2_protocol.h` | Packed payload/frame structs, CRC, canonical/air-frame conversion, validation, and address extraction; uses ESPHome's CRC, byte-order, and bit-casting helpers |
 | `lr1121_radio.h` | LR1121 command/packet handling using ESPHome `SPIDevice` and GPIO |
@@ -49,11 +50,13 @@ This ordering makes consecutive front/back commands from HA's group or “all li
 
 LR1121 queues the complete one- or two-packet batch before starting it. **Command sent** is published and the cooldown starts only after every packet reports TX_DONE. New HA requests can update the pending state while that batch is in flight. Received frames cannot overwrite pending commands.
 
-Received controller state is published under a guard that prevents the resulting light callbacks from queuing another transmission. Shared-temperature synchronization uses the same guard. The light adapter also tracks whether a deferred write originated locally, so an incoming radio update is not echoed later.
+Received controller state is published under a scoped guard that prevents the resulting light callbacks from queuing another transmission. Shared-temperature synchronization uses the same guard. Nested guards restore their previous value when leaving scope. Publication does not change the lifecycle state. The light adapter also tracks whether a deferred write originated locally, so an incoming radio update is not echoed later.
 
 At boot, light preferences and the saved selection restore requested settings without sending settings or power commands. The saved radio link includes address, channel, and timeout; the timeout occupies the former packet-options byte, preserving preference version 2's eight-byte layout. Local controls require a valid received state after boot or recovery, so UI defaults cannot overwrite the sensor's actual configuration. Recovery and starting discovery invalidate the received baseline and observation while retaining requested settings for display. Unchanged status replies do not republish entities.
 
 ## LR1121 scheduling and recovery
+
+`BridgeLifecycle` owns command eligibility. Initialization leads to `AWAITING_STATE` for a known link or `DISCOVERING` for a new link. A valid received baseline or completed discovery leads to `ACTIVE`, the only state accepting local commands. Failure enters recovery; retries initialize the radio and require a new baseline. Initialization and recovery each have a discovery variant, so an interrupted scan resumes scanning while a learned link resumes normal reception. Discovery channel changes, listening, and dwell expiry also use explicit phases.
 
 The driver advances up to four SPI transactions per ESPHome loop call. Reset pulse timing, startup, BUSY waits, calibration, TX completion, RX reads and rearming all use timed states. Individual SPI transfers remain synchronous and bounded to 32 bytes at 1 MHz; the only explicit delay is one microsecond for NSS-to-BUSY propagation. The component keeps its loop enabled to service the radio, checking commands and received frames every 50 ms. ESPHome's `PollingComponent` schedules periodic lamp status queries independently, while named scheduler timeouts handle recovery retries and discovery dwell periods.
 
@@ -62,6 +65,8 @@ The LR1121 driver registers with ESPHome's SPI bus and uses generated GPIO objec
 Faults stop the current operation and schedule radio reinitialization with an exponential retry delay of 1–30 seconds. The bridge keeps Wi-Fi/API connectivity and its saved address, channel and timeout. Successful initialization resets the retry delay, restores passive reception or restarts an interrupted discovery, and schedules a fresh lamp-state query. In-flight and pending commands are dropped so recovery cannot replay stale actions. Failed initialization also retries instead of permanently marking the component failed.
 
 ## LR1121 status polling
+
+`StatusPoll` owns the refresh/read cycle with explicit delay, transmission, and reply-wait phases. It handles PID matching, read retry limits, wrap-safe deadlines, cancellation, and consecutive failure counts. Only its `STATE` result permits applying a lamp observation; the component handles radio I/O and defers new requests while commands or light transitions are pending.
 
 Status polling uses command `0x04`, with a five-second default cycle. It starts after initialization or discovery, and local commands or received controller requests bring the next refresh forward to 500 ms. Polling yields to pending commands and light transitions.
 
@@ -103,4 +108,4 @@ The opt-in [pytest hardware suite](../tests/hardware/) sends native API commands
 
 The original controller sends settings snapshots, so a later valid request can recover missed updates. LR1121 polling also catches autonomous presence changes, Auto brightness adjustments, and missed requests. Collisions, range, or a disconnected lamp can delay synchronization; polling retains the last known state until a reply arrives.
 
-The Waveshare implementation has been exercised on hardware for discovery, saved-link restoration, native API control, front/back operation, grouped on/off commands, Auto brightness, lamp status reception, and all ultrasonic select options. Combined power/settings/timeout requests were verified by lamp readback. The [protocol evidence and limitations](PROTOCOL.md#capture-evidence-2026-09-28) distinguish these checks from physical inactivity timing and other untested behavior. Native tests cover the lamp state model's grouped commands, brightness retention, request/observation separation, readback reconciliation, and recovery. CI runs those tests and compiles the Waveshare configuration using the pinned Podman image. A successful build or TX_DONE alone does not establish lamp acknowledgement or RF isolation measurements.
+The Waveshare implementation has been exercised on hardware for discovery, saved-link restoration, native API control, front/back operation, grouped on/off commands, Auto brightness, lamp status reception, and all ultrasonic select options. Combined power/settings/timeout requests were verified by lamp readback. The [protocol evidence and limitations](PROTOCOL.md#capture-evidence-2026-09-28) distinguish these checks from physical inactivity timing and other untested behavior. Native tests cover the lamp state model's grouped commands, brightness retention, request/observation separation, readback reconciliation, and recovery, plus lifecycle gating, discovery recovery, nested publication, polling freshness, retries, cancellation, and clock wraparound. CI runs those tests and compiles the Waveshare configuration using the pinned Podman image. A successful build or TX_DONE alone does not establish lamp acknowledgement or RF isolation measurements.

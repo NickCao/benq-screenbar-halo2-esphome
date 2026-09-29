@@ -8,6 +8,7 @@
 #include "esphome/components/light/light_output.h"
 #include "esphome/components/select/select.h"
 #include "esphome/components/text_sensor/text_sensor.h"
+#include "bridge_state.h"
 #include "halo2_protocol.h"
 #include "lr1121_radio.h"
 
@@ -39,7 +40,7 @@ class Halo2 : public PollingComponent {
   void start_discovery();
   void start_auto_brightness();
 
-  bool accepts_commands() const { return ready_ && lamp_state_.initialized() && !publishing_ && !discovering_; }
+  bool accepts_commands() const { return lifecycle_.active() && !publishing_; }
   void control_light(light::LightState *light, bool front);
   void control_ultrasonic(size_t index);
   void resend() {
@@ -92,20 +93,19 @@ class Halo2 : public PollingComponent {
   ESPPreferenceObject link_preference_;
   halo2_protocol::Address radio_address_{halo2_protocol::RADIO_ADDRESS};
   std::array<Candidate, 4> candidates_{};
-  bool scan_expired_{false};
+  enum class DiscoveryPhase { CHANNEL_PENDING, LISTENING, EXPIRED };
+  DiscoveryPhase discovery_phase_{DiscoveryPhase::CHANNEL_PENDING};
   uint8_t scan_step_{0};
   uint8_t radio_channel_{halo2_protocol::RADIO_CHANNEL};
   bool address_configured_{false};
   bool auto_discover_{false};
-  bool discovering_{false};
+  BridgeLifecycle lifecycle_;
   enum class Transmission { NONE, COMMAND, STATUS };
   LR1121Radio radio_;
   uint8_t app_pid_{0};
   uint8_t last_pcf_{0};
   Transmission transmission_{Transmission::NONE};
   uint32_t recovery_delay_{RECOVERY_INITIAL_DELAY_MS};
-  bool recovering_{false};
-  bool scan_pending_{false};
   LampStateModel lamp_state_;
   uint32_t frequency_deviation_{LR1121Radio::DEFAULT_DEVIATION_HZ};
   uint8_t pulse_shape_{LR1121Radio::DEFAULT_PULSE_SHAPE};
@@ -116,16 +116,8 @@ class Halo2 : public PollingComponent {
   bool pending_auto_brightness_{false};
   uint32_t processing_interval_{50};
   uint32_t last_process_at_{0};
-  bool status_poll_pending_{false};
-  uint32_t next_status_poll_{0};
-  uint32_t status_request_started_{0};
-  uint8_t status_request_pcf_{0};
-  uint8_t status_read_attempts_{0};
-  uint8_t status_timeouts_{0};
-  bool awaiting_status_{false};
-  bool status_followup_{false};
+  StatusPoll status_poll_;
   uint8_t saved_mode_{SavedMode::BOTH};
-  bool ready_{false};
   bool publishing_{false};
 };
 

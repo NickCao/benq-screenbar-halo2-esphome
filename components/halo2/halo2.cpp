@@ -19,8 +19,6 @@ static constexpr uint32_t RECOVERY_MAX_DELAY_MS = 30000;
 static constexpr uint32_t DISCOVERY_DWELL_MS = 3000, DISCOVERY_STATUS_DELAY_MS = 1000;
 static constexpr uint8_t DISCOVERY_REQUIRED_CAPTURES = 3;
 static constexpr std::array<uint8_t, 2> DISCOVERY_PREAMBLES{0xAA, 0x55};
-static constexpr uint32_t STATUS_SETTLE_MS = 500, STATUS_REPLY_TIMEOUT_MS = 200;
-static constexpr uint8_t STATUS_MAX_READ_ATTEMPTS = 3, STATUS_FAILURE_THRESHOLD = 3;
 
 static uint8_t brightness_percent(float brightness) {
   return static_cast<uint8_t>(std::clamp<long>(std::lround(brightness * 100.0f), 0, MAX_BRIGHTNESS_PERCENT));
@@ -77,23 +75,20 @@ void Halo2::setup() {
     requested.ultrasonic_timeout = saved.ultrasonic_timeout;
     lamp_state_.request(requested);
   }
-  discovering_ = auto_discover_ && !address_configured_ && !restored;
+  lifecycle_ = BridgeLifecycle(auto_discover_ && !address_configured_ && !restored);
   // Setup, reception, transmission and recovery all advance in loop().
   enable_loop();
   start_radio_();
 }
 
 void Halo2::start_radio_() {
-  ready_ = false;
-  recovering_ = false;
+  if (!lifecycle_.initializing() && !lifecycle_.retry()) return;
   publish_status_("Initializing radio");
   if (!radio_.setup(frequency_deviation_, pulse_shape_, radio_address_, radio_channel_)) recover_radio_();
 }
 
 void Halo2::recover_radio_() {
-  if (recovering_) return;
-  ready_ = false;
-  recovering_ = true;
+  if (!lifecycle_.on_radio_failure()) return;
   transmission_ = Transmission::NONE;
   // Never replay an interrupted command batch after reconnecting to the lamp.
   pending_commands_.reset();
@@ -121,7 +116,7 @@ void Halo2::publish_address_() {
 }
 
 void Halo2::start_discovery() {
-  if (!ready_) return;
+  if (!lifecycle_.begin_discovery()) return;
   pending_commands_.reset();
   pending_auto_brightness_ = false;
   cancel_status_poll_();
@@ -129,8 +124,7 @@ void Halo2::start_discovery() {
   lamp_state_.invalidate();
   candidates_ = {};
   scan_step_ = 0;
-  discovering_ = true;
-  scan_pending_ = true;
+  discovery_phase_ = DiscoveryPhase::CHANNEL_PENDING;
   ESP_LOGI(TAG, "Discovery: adjust the controller brightness near the board");
 }
 
@@ -141,8 +135,8 @@ bool Halo2::scan_channel_() {
     recover_radio_();
     return false;
   }
-  scan_expired_ = false;
-  set_timeout("discovery_dwell", DISCOVERY_DWELL_MS, [this]() { scan_expired_ = true; });
+  discovery_phase_ = DiscoveryPhase::LISTENING;
+  set_timeout("discovery_dwell", DISCOVERY_DWELL_MS, [this]() { discovery_phase_ = DiscoveryPhase::EXPIRED; });
   char status[80];
   snprintf(status, sizeof(status), "Discovering at %u MHz; adjust controller brightness",
            protocol::RADIO_BASE_FREQUENCY_MHZ + channel);
@@ -152,42 +146,42 @@ bool Halo2::scan_channel_() {
 }
 
 void Halo2::loop() {
-  if (recovering_) return;
+  if (lifecycle_.recovering()) return;
   radio_.loop();
   if (radio_.last_error() != nullptr) {
     recover_radio_();
     return;
   }
-  if (!ready_) {
+  if (lifecycle_.initializing()) {
     if (!radio_.ready()) return;
-    ready_ = true;
+    lifecycle_.on_radio_ready();
     recovery_delay_ = RECOVERY_INITIAL_DELAY_MS;
-    status_timeouts_ = 0;
+    status_poll_.reset_failures();
     status_clear_warning();
     ESP_LOGI(TAG, "LR1121 firmware %04X, %u MHz GFSK; radio ready", radio_.firmware_version(),
              protocol::RADIO_BASE_FREQUENCY_MHZ + radio_channel_);
-    if (discovering_) {
+    if (lifecycle_.discovering()) {
       start_discovery();
     } else {
       publish_address_();
       publish_status_("Listening");
       // Read the lamp after recovery instead of imposing the saved HA state.
-      schedule_status_poll_(STATUS_SETTLE_MS);
+      schedule_status_poll_(StatusPoll::SETTLE_MS);
     }
   }
   if (radio_.take_tx_done()) {
     if (transmission_ == Transmission::STATUS) {
-      status_request_started_ = millis();
+      status_poll_.on_tx_done(millis());
     } else if (transmission_ == Transmission::COMMAND) {
       command_sent_at_ = millis();
       command_sent_ = true;
       status_clear_warning();
       publish_status_("Command sent");
-      schedule_status_poll_(STATUS_SETTLE_MS);
+      schedule_status_poll_(StatusPoll::SETTLE_MS);
     }
     transmission_ = Transmission::NONE;
   }
-  if (!discovering_) {
+  if (lifecycle_.linked()) {
     // Keep fast command/RX processing separate from periodic lamp polling.
     const uint32_t now = App.get_loop_component_start_time();
     if (now - last_process_at_ >= processing_interval_) {
@@ -197,8 +191,8 @@ void Halo2::loop() {
     return;
   }
   if (!radio_.idle()) return;
-  if (scan_pending_) {
-    if (scan_channel_()) scan_pending_ = false;
+  if (discovery_phase_ == DiscoveryPhase::CHANNEL_PENDING) {
+    scan_channel_();
     return;
   }
   protocol::Address address{};
@@ -238,11 +232,11 @@ void Halo2::loop() {
       }
       radio_address_ = address;
       radio_channel_ = channel;
-      discovering_ = false;
       cancel_timeout("discovery_dwell");
       const SavedLink saved{address, channel, SAVED_LINK_VERSION, state.ultrasonic_timeout, 0};
       const bool persisted = link_preference_.save(&saved) && global_preferences->sync();
       lamp_state_.receive_request(state);
+      lifecycle_.on_received_state();
       schedule_status_poll_(DISCOVERY_STATUS_DELAY_MS);
       save_mode_();
       publish_lights_();
@@ -255,10 +249,10 @@ void Halo2::loop() {
       return;
     }
   }
-  if (scan_expired_) {
+  if (discovery_phase_ == DiscoveryPhase::EXPIRED) {
     ESP_LOGD(TAG, "Discovery captured %" PRIu32 " buffers", radio_.capture_count());
     scan_step_ = (scan_step_ + 1) % (protocol::RADIO_CHANNELS.size() * DISCOVERY_PREAMBLES.size());
-    scan_pending_ = true;
+    discovery_phase_ = DiscoveryPhase::CHANNEL_PENDING;
   }
 }
 
@@ -319,9 +313,8 @@ void Halo2::control_light(light::LightState *light, bool front) {
   if (!light->is_transformer_active() && light->remote_values.get_brightness() == 0.0f) {
     // Keep ESPHome's next plain ON from replacing a retained brightness with
     // its zero-brightness fallback. Do not interrupt an active fade here.
-    publishing_ = true;
+    ScopedPublication guard(publishing_);
     publish_light_(light, front);
-    publishing_ = false;
   }
   if (temperature_changed ||
       (!light->is_transformer_active() && values.get_color_temperature() != 1000000.0f / requested.color_temperature)) {
@@ -334,18 +327,19 @@ void Halo2::synchronize_temperature_(light::LightState *source) {
   const auto temperature = lamp_state_.requested().color_temperature;
   // Temperature is shared by the lamp. Keep the other entity's next command
   // from accidentally restoring its previous temperature.
-  publishing_ = true;
-  auto call = peer->make_call();
-  call.set_color_temperature(1000000.0f / temperature);
-  call.set_transition_length(0);
-  call.perform();
-  if (!source->is_transformer_active()) {
-    auto source_call = source->make_call();
-    source_call.set_color_temperature(1000000.0f / temperature);
-    source_call.set_transition_length(0);
-    source_call.perform();
+  {
+    ScopedPublication guard(publishing_);
+    auto call = peer->make_call();
+    call.set_color_temperature(1000000.0f / temperature);
+    call.set_transition_length(0);
+    call.perform();
+    if (!source->is_transformer_active()) {
+      auto source_call = source->make_call();
+      source_call.set_color_temperature(1000000.0f / temperature);
+      source_call.set_transition_length(0);
+      source_call.perform();
+    }
   }
-  publishing_ = false;
   // A shared temperature change also ends a simultaneous peer transition.
   // Include its final state in the same packet so HA and the lamp agree.
   control_light(peer, peer == front_light_);
@@ -390,10 +384,9 @@ void Halo2::publish_light_(light::LightState *light, bool front) {
 }
 
 void Halo2::publish_lights_() {
-  publishing_ = true;
+  ScopedPublication guard(publishing_);
   publish_light_(front_light_, true);
   publish_light_(back_light_, false);
-  publishing_ = false;
 }
 
 void Halo2::publish_status_(const char *status) {
@@ -413,6 +406,7 @@ void Halo2::save_mode_() {
 void Halo2::apply_received_(const protocol::ReceivedPacket &received) {
   const auto &state = received.state;
   const bool changed = received.is_reply() ? lamp_state_.observe(state) : lamp_state_.receive_request(state);
+  lifecycle_.on_received_state();
   // Persist received settings even when they match an optimistic local change.
   // ESPHome skips flash writes when the stored preference is unchanged.
   const SavedLink saved{radio_address_, radio_channel_, SAVED_LINK_VERSION, state.ultrasonic_timeout, 0};
@@ -427,24 +421,16 @@ void Halo2::apply_received_(const protocol::ReceivedPacket &received) {
 }
 
 void Halo2::update() {
-  if (ready_ && !discovering_ && pending_commands_.none() && transmission_ == Transmission::NONE &&
-      !status_poll_pending_ && !awaiting_status_ && !status_followup_)
+  if (lifecycle_.linked() && pending_commands_.none() && transmission_ == Transmission::NONE && status_poll_.idle())
     schedule_status_poll_(0);
 }
 
-void Halo2::schedule_status_poll_(uint32_t delay) {
-  status_poll_pending_ = true;
-  next_status_poll_ = millis() + delay;
-}
+void Halo2::schedule_status_poll_(uint32_t delay) { status_poll_.schedule(millis(), delay); }
 
-void Halo2::cancel_status_poll_() {
-  status_poll_pending_ = false;
-  awaiting_status_ = false;
-  status_followup_ = false;
-}
+void Halo2::cancel_status_poll_() { status_poll_.cancel(); }
 
 void Halo2::process_radio_() {
-  if (!ready_ || discovering_) return;
+  if (!lifecycle_.linked()) return;
   if (transmission_ != Transmission::NONE) return;
   if (pending_commands_.any()) {
     // Send the first request without a debounce delay. During the cooldown
@@ -487,32 +473,20 @@ void Halo2::process_radio_() {
   protocol::ReceivedPacket received;
   const uint32_t previous_rx_count = radio_.rx_count();
   const bool received_state = radio_.poll(received);
-  if (awaiting_status_ && radio_.rx_count() != previous_rx_count) {
+  if (status_poll_.waiting_reply() && radio_.rx_count() != previous_rx_count) {
     const auto &frame = radio_.rx_frame();
     ESP_LOGV(TAG, "Status RX: %s, decoded %s, PCF %02X/%02X, command %02X",
-             format_hex_pretty(frame.data(), frame.size()).c_str(), YESNO(received_state), received.pcf,
-             status_request_pcf_, received.command);
+             format_hex_pretty(frame.data(), frame.size()).c_str(), YESNO(received_state), received.pcf, last_pcf_,
+             received.command);
   }
   if (received_state) {
     if (!received.is_reply()) {
-      awaiting_status_ = false;
-      status_followup_ = false;
       apply_received_(received);
-      schedule_status_poll_(STATUS_SETTLE_MS);
-    } else if (awaiting_status_ &&
-               (received.pcf & protocol::PCF_PID_MASK) == (status_request_pcf_ & protocol::PCF_PID_MASK)) {
-      if (!status_followup_ ||
-          (received.command != Command::STATUS && status_read_attempts_ < STATUS_MAX_READ_ATTEMPTS)) {
-        // The first ACK confirms delivery, but its payload was queued before
-        // the request. Give the lamp time to refresh it before reading again.
-        // Drain any additional queued command ACKs with bounded read retries.
-        awaiting_status_ = false;
-        status_followup_ = true;
-        schedule_status_poll_(STATUS_SETTLE_MS);
-      } else if (received.command == Command::STATUS) {
-        awaiting_status_ = false;
-        status_followup_ = false;
-        status_timeouts_ = 0;
+      schedule_status_poll_(StatusPoll::SETTLE_MS);
+    } else {
+      const auto reply =
+          status_poll_.on_reply(received.pcf & protocol::PCF_PID_MASK, received.command == Command::STATUS, millis());
+      if (reply == StatusPoll::Reply::STATE) {
         if (!front_light_->is_transformer_active() && !back_light_->is_transformer_active()) {
           apply_received_(received);
           const auto &state = received.state;
@@ -530,31 +504,20 @@ void Halo2::process_radio_() {
   }
 
   const uint32_t now = millis();
-  if (awaiting_status_ && now - status_request_started_ >= STATUS_REPLY_TIMEOUT_MS) {
-    awaiting_status_ = false;
-    status_followup_ = false;
-    if (status_timeouts_ < STATUS_FAILURE_THRESHOLD) ++status_timeouts_;
-    ESP_LOGD(TAG, "Lamp status query timed out (%u consecutive, IRQ %08" PRIX32 ")", status_timeouts_,
+  if (status_poll_.expire(now)) {
+    ESP_LOGD(TAG, "Lamp status query timed out (%u consecutive, IRQ %08" PRIX32 ")", status_poll_.failures(),
              radio_.last_irq());
-    if (status_timeouts_ >= STATUS_FAILURE_THRESHOLD) {
+    if (status_poll_.failures() >= StatusPoll::FAILURE_THRESHOLD) {
       status_set_warning();
       publish_status_("Lamp status unavailable; retaining last known state");
     }
   }
-  if (!status_poll_pending_ || awaiting_status_ || static_cast<int32_t>(now - next_status_poll_) < 0 ||
-      front_light_->is_transformer_active() || back_light_->is_transformer_active() || !radio_.idle())
+  if (!status_poll_.due(now) || front_light_->is_transformer_active() || back_light_->is_transformer_active() ||
+      !radio_.idle())
     return;
-  const bool followup = status_followup_;
-  if (followup) {
-    ++status_read_attempts_;
-  } else {
-    status_read_attempts_ = 0;
-  }
-  status_poll_pending_ = false;
-  ESP_LOGD(TAG, "%s lamp status", followup ? "Reading" : "Refreshing");
+  ESP_LOGD(TAG, "%s lamp status", status_poll_.reading() ? "Reading" : "Refreshing");
   if (send_state_(Command::STATUS)) {
-    awaiting_status_ = true;
-    status_request_pcf_ = last_pcf_;
+    status_poll_.begin_request(last_pcf_ & protocol::PCF_PID_MASK);
     transmission_ = Transmission::STATUS;
   } else {
     recover_radio_();
