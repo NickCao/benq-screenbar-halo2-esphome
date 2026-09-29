@@ -146,11 +146,11 @@ class LR1121Radio : public spi::SPIDevice<spi::BIT_ORDER_MSB_FIRST, spi::CLOCK_P
     return operation_ != Operation::FAILED;
   }
 
-  bool poll(halo2_protocol::HaloRxState &state) {
-    state = {};
+  bool poll(halo2_protocol::ReceivedPacket &packet) {
+    packet = {};
     if (!ready_ || discovering_ || !consume_frame_()) return false;
     ++rx_count_;
-    return halo2_protocol::decode_air_frame(rx_frame_.data(), rx_frame_.size(), state, address_, true);
+    return halo2_protocol::decode_air_frame(rx_frame_.data(), rx_frame_.size(), packet, address_, true);
   }
 
   bool listen_for_address(uint8_t channel, uint8_t sync_byte) {
@@ -166,11 +166,11 @@ class LR1121Radio : public spi::SPIDevice<spi::BIT_ORDER_MSB_FIRST, spi::CLOCK_P
     return operation_ != Operation::FAILED;
   }
 
-  bool poll_address(halo2_protocol::Address &address, halo2_protocol::HaloRxState &state) {
-    state = {};
+  bool poll_address(halo2_protocol::Address &address, halo2_protocol::ReceivedPacket &packet) {
+    packet = {};
     if (!ready_ || !discovering_ || !consume_frame_()) return false;
     ++capture_count_;
-    return halo2_protocol::discover_address(capture_data_.data(), capture_data_.size(), address, state);
+    return halo2_protocol::discover_address(capture_data_.data(), capture_data_.size(), address, packet);
   }
 
   bool use_address(const halo2_protocol::Address &address, uint8_t channel) {

@@ -7,7 +7,8 @@ The bridge follows the [ESPHome external-component layout](https://esphome.io/co
 | File | Responsibility |
 |---|---|
 | `__init__.py` | Configuration validation, entity creation, SPI registration, and GPIO code generation |
-| `halo2.h`, `halo2.cpp` | One shared lamp state, native entity adapters, command batching, status polling, preference storage, and discovery coordination |
+| `lamp_state.h` | Lamp settings, section/brightness rules, and requested versus observed state; independent of ESPHome and radio metadata |
+| `halo2.h`, `halo2.cpp` | Native entity adapters, command batching, status polling, preference storage, and discovery coordination |
 | `halo2_protocol.h` | Packed payload/frame structs, CRC, canonical/air-frame conversion, validation, and address extraction; uses ESPHome's CRC, byte-order, and bit-casting helpers |
 | `lr1121_radio.h` | LR1121 command/packet handling using ESPHome `SPIDevice` and GPIO |
 
@@ -17,7 +18,9 @@ The [protocol reference](PROTOCOL.md) documents the wire format, capture evidenc
 
 ## HA state and radio commands
 
-`Halo2` keeps one `HaloRxState`: global power, front/back selection, two brightness values, shared temperature, presence-mode enable, and inactivity timeout. The front/back lights and ultrasonic select are views of this state.
+`LampState` contains global power, a front/back selection enum, two brightness values, shared temperature, presence-mode enable, and inactivity timeout. `LampStateModel` keeps requested settings for outgoing commands and the optimistic UI, plus an optional observation from the last accepted fresh lamp status reply. HA commands and received controller requests update requested settings without changing that observation. Accepted status replies update both, reconciling requests with the lamp. A matching reply records an observation even when it does not require a UI update.
+
+Packet command, PCF, and request/reply direction belong to `ReceivedPacket`, alongside its decoded `LampState`. Decoder success is reported by its return value; initialization belongs to the state model. Packet metadata cannot become part of requested lamp settings.
 
 | Front light | Back light | Radio state |
 |---|---|---|
@@ -26,7 +29,7 @@ The [protocol reference](PROTOCOL.md) documents the wire format, capture evidenc
 | Off | On | Power on, back selected |
 | Off | Off | Power off, a valid previous selection retained in the frame |
 
-There is no master Power entity. Turning one section off while the other remains on changes selection. Turning off the last section requires global power OFF. Each section's last useful brightness is retained.
+There is no master Power entity. Turning one section off while the other remains on changes selection. Turning off the last section requires global power OFF. `LampState::set_light()` centralizes these rules and retains each section's last nonzero brightness. The light adapter also restores that brightness to ESPHome after an immediate zero-brightness OFF request, so a following plain ON uses the retained value.
 
 Color temperature is one logical setting and is mirrored between the two light entities. The payload contains two temperature fields; the bridge writes the same value to both. Behavior with unequal outgoing temperature fields has not been characterized.
 
@@ -48,7 +51,7 @@ LR1121 queues the complete one- or two-packet batch before starting it. **Comman
 
 Received controller state is published under a guard that prevents the resulting light callbacks from queuing another transmission. Shared-temperature synchronization uses the same guard. The light adapter also tracks whether a deferred write originated locally, so an incoming radio update is not echoed later.
 
-At boot, light preferences and the saved selection initialize the bridge without sending settings or power commands. The saved radio link includes address, channel, and timeout; the timeout occupies the former packet-options byte, preserving preference version 2's layout. Local controls require a valid received state after boot or recovery, so UI defaults cannot overwrite the sensor's actual configuration. HA commands are then optimistic; received controller requests and validated LR1121 status replies replace this state. Unchanged status replies do not republish entities.
+At boot, light preferences and the saved selection restore requested settings without sending settings or power commands. The saved radio link includes address, channel, and timeout; the timeout occupies the former packet-options byte, preserving preference version 2's eight-byte layout. Local controls require a valid received state after boot or recovery, so UI defaults cannot overwrite the sensor's actual configuration. Recovery and starting discovery invalidate the received baseline and observation while retaining requested settings for display. Unchanged status replies do not republish entities.
 
 ## LR1121 scheduling and recovery
 
@@ -98,4 +101,4 @@ The [protocol reference](PROTOCOL.md#framing-and-packet-control-field) is the so
 
 The original controller sends settings snapshots, so a later valid request can recover missed updates. LR1121 polling also catches autonomous presence changes, Auto brightness adjustments, and missed requests. Collisions, range, or a disconnected lamp can delay synchronization; polling retains the last known state until a reply arrives.
 
-The Waveshare implementation has been exercised on hardware for discovery, saved-link restoration, native API control, front/back operation, grouped on/off commands, Auto brightness, lamp status reception, and all ultrasonic select options. Combined power/settings/timeout requests were verified by lamp readback. The [protocol evidence and limitations](PROTOCOL.md#capture-evidence-2026-09-28) distinguish these checks from physical inactivity timing and other untested behavior. CI separately compiles the Waveshare configuration using the pinned Podman image. A successful build or TX_DONE alone does not establish lamp acknowledgement or RF isolation measurements.
+The Waveshare implementation has been exercised on hardware for discovery, saved-link restoration, native API control, front/back operation, grouped on/off commands, Auto brightness, lamp status reception, and all ultrasonic select options. Combined power/settings/timeout requests were verified by lamp readback. The [protocol evidence and limitations](PROTOCOL.md#capture-evidence-2026-09-28) distinguish these checks from physical inactivity timing and other untested behavior. Native tests cover the lamp state model's grouped commands, brightness retention, request/observation separation, readback reconciliation, and recovery. CI runs those tests and compiles the Waveshare configuration using the pinned Podman image. A successful build or TX_DONE alone does not establish lamp acknowledgement or RF isolation measurements.

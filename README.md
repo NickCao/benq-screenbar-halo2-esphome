@@ -115,23 +115,27 @@ Upload updates and view logs with:
 | [`packages/halo2-common.yaml`](packages/halo2-common.yaml) | Networking, native API, entities, and common defaults |
 | [`screenbar-halo2-lr1121.yaml`](screenbar-halo2-lr1121.yaml) | Waveshare board configuration and radio wiring |
 | [`scripts/esphome`](scripts/esphome) | Podman wrapper used locally and by CI |
+| [`scripts/test`](scripts/test), [`tests/`](tests/) | Native lamp state model tests |
 | [`secrets.example.yaml`](secrets.example.yaml) | Credential template |
 | [`home-assistant/dashboard.yaml`](home-assistant/dashboard.yaml) | Optional HA dashboard |
 | [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | Component options, manual addressing, and dashboard setup |
 | [`docs/WIRING.md`](docs/WIRING.md) | Waveshare antennas and pins |
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | Radio framing, CRC, commands, capture evidence, and remaining unknowns |
 | [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) | ESPHome state handling, scheduling, polling, and discovery |
-| [`.github/workflows/validate.yml`](.github/workflows/validate.yml) | Podman compilation of the Waveshare firmware |
+| [`.github/workflows/validate.yml`](.github/workflows/validate.yml) | Native tests and Podman compilation of the Waveshare firmware |
 
 All C++ sources needed by `halo2` live in its component directory and are copied by ESPHome automatically. The board YAML does not need `esphome.includes`. This follows ESPHome's [external-component layout](https://esphome.io/components/external_components/).
 
 ## Development
 
 ```bash
+./scripts/test
 ./scripts/esphome compile screenbar-halo2-lr1121.yaml
 ```
 
-CI uses dummy credentials and compiles the Waveshare profile. The wrapper defaults to four compiler processes; override `ESPHOME_DEFAULT_COMPILE_PROCESS_LIMIT` if needed. `ESPHOME_IMAGE` can select another image for compatibility checks.
+The native tests require a C++20 compiler; set `CXX` to its path if it is not available as `c++`. They have no ESPHome or hardware dependencies.
+
+CI runs the native tests, then uses dummy credentials to compile the Waveshare profile. The wrapper defaults to four compiler processes; override `ESPHOME_DEFAULT_COMPILE_PROCESS_LIMIT` if needed. `ESPHOME_IMAGE` can select another image for compatibility checks.
 
 ## Project notes
 

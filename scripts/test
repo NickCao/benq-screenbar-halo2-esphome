@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+test_dir="$(mktemp -d "${TMPDIR:-/tmp}/halo2-tests.XXXXXX")"
+trap 'rm -rf -- "$test_dir"' EXIT
+
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -Werror -pedantic \
+  -I "$project_dir/components/halo2" \
+  "$project_dir/tests/lamp_state_test.cpp" -o "$test_dir/lamp_state_test"
+"$test_dir/lamp_state_test"

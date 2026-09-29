@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+      - name: Test lamp state model
+        run: ./scripts/test
       - uses: actions/cache@v4
         with:
           path: .esphome/cache

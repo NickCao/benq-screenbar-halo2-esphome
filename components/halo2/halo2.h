@@ -39,7 +39,7 @@ class Halo2 : public PollingComponent {
   void start_discovery();
   void start_auto_brightness();
 
-  bool accepts_commands() const { return ready_ && state_.valid && !publishing_ && !discovering_; }
+  bool accepts_commands() const { return ready_ && lamp_state_.initialized() && !publishing_ && !discovering_; }
   void control_light(light::LightState *light, bool front);
   void control_ultrasonic(size_t index);
   void resend() {
@@ -47,7 +47,7 @@ class Halo2 : public PollingComponent {
   }
 
  protected:
-  // Persisted selection is a bitmask, distinct from the on-air LampMode enum.
+  // Persisted selection is a bitmask, distinct from LampSelection's wire values.
   enum SavedMode : uint8_t { NONE = 0, FRONT = 1, BACK = 2, BOTH = FRONT | BACK };
   static constexpr uint32_t RECOVERY_INITIAL_DELAY_MS = 1000;
 
@@ -58,7 +58,7 @@ class Halo2 : public PollingComponent {
   void synchronize_temperature_(light::LightState *source);
   void publish_status_(const char *status);
   void save_mode_();
-  void apply_received_(const halo2_protocol::HaloRxState &received);
+  void apply_received_(const halo2_protocol::ReceivedPacket &received);
   void publish_address_();
   bool scan_channel_();
   void process_radio_();
@@ -73,9 +73,10 @@ class Halo2 : public PollingComponent {
     uint8_t channel{0};
     uint8_t version{0};
     // Same byte and values as the former packet_options field (version 2).
-    halo2_protocol::UltrasonicTimeout ultrasonic_timeout{halo2_protocol::UltrasonicTimeout::MINUTES_5};
+    UltrasonicTimeout ultrasonic_timeout{UltrasonicTimeout::MINUTES_5};
     uint8_t reserved{0};
   };
+  static_assert(sizeof(SavedLink) == 8);
   struct Candidate {
     halo2_protocol::Address address{};
     uint8_t channel{0};
@@ -105,7 +106,7 @@ class Halo2 : public PollingComponent {
   uint32_t recovery_delay_{RECOVERY_INITIAL_DELAY_MS};
   bool recovering_{false};
   bool scan_pending_{false};
-  halo2_protocol::HaloRxState state_;
+  LampStateModel lamp_state_;
   uint32_t frequency_deviation_{LR1121Radio::DEFAULT_DEVIATION_HZ};
   uint8_t pulse_shape_{LR1121Radio::DEFAULT_PULSE_SHAPE};
   std::bitset<halo2_protocol::MAX_COMMAND_CODE + 1> pending_commands_;

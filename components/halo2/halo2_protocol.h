@@ -5,9 +5,13 @@
 #include <cstdint>
 #include <cstring>
 #include "esphome/core/helpers.h"
+#include "lamp_state.h"
 
 // Canonical payload representation and the LR1121's 9-bit PCF on-air format.
 namespace halo2_protocol {
+using esphome::halo2::LampSelection;
+using esphome::halo2::LampState;
+using esphome::halo2::UltrasonicTimeout;
 using Address = std::array<uint8_t, 4>;
 constexpr Address RADIO_ADDRESS{0x9C, 0xEA, 0xBB, 0x86};
 constexpr std::array<uint8_t, 3> RADIO_CHANNELS{5, 46, 75};
@@ -17,13 +21,8 @@ constexpr unsigned RADIO_BASE_FREQUENCY_MHZ = 2400;
 // The controller also sends 0x05 when going to sleep; it saves the timeout.
 enum Command : uint8_t { POWER = 0x02, SETTINGS = 0x03, STATUS = 0x04, ULTRASONIC_TIMEOUT = 0x05 };
 constexpr uint8_t MAX_COMMAND_CODE = 0x05;
-enum LampMode : uint8_t { FRONT_ONLY = 0, BACK_ONLY = 1, BOTH = 2 };
-enum UltrasonicTimeout : uint8_t { MINUTES_3 = 0, MINUTES_5 = 1, MINUTES_10 = 2, MINUTES_15 = 3 };
-constexpr std::array<uint8_t, 4> ULTRASONIC_TIMEOUT_MINUTES{3, 5, 10, 15};
 constexpr uint8_t PCF_NO_ACK = 0x01, PCF_PID_MASK = 0x06, PCF_PID_SHIFT = 1, PCF_LENGTH_SHIFT = 3;
 constexpr uint8_t PACKET_SUFFIX = 0x02;
-constexpr uint8_t MIN_BRIGHTNESS_PERCENT = 1, MAX_BRIGHTNESS_PERCENT = 100;
-constexpr uint16_t MIN_TEMPERATURE_K = 2700, MAX_TEMPERATURE_K = 6500, TEMPERATURE_STEP_K = 25;
 constexpr uint16_t CRC_INITIAL = 0xFFFF, CRC_POLYNOMIAL = 0x1021, CRC_TOP_BIT = 0x8000;
 
 // Bit-fields follow the ESP32/GCC layout: least significant bit first.
@@ -31,7 +30,7 @@ struct Control {
   uint8_t power : 1;
   uint8_t auto_brightness : 1;
   uint8_t favorite : 1;
-  LampMode mode : 2;
+  uint8_t mode : 2;
   uint8_t ultrasonic : 1;
   uint8_t reserved : 2;
 } __attribute__((packed));
@@ -64,12 +63,14 @@ constexpr size_t AIR_FRAME_BITS = FRAME_SIZE * 8 + 1;
 constexpr size_t AIR_FRAME_SIZE = (AIR_FRAME_BITS + 7) / 8;
 using AirFrame = std::array<uint8_t, AIR_FRAME_SIZE>;
 
-struct HaloRxState {
-  bool valid = false, power = false, pir = false, front = false, back = false;
-  bool reply = false;
-  uint8_t command = 0, front_brightness = 0, back_brightness = 0, pcf = 0;
-  UltrasonicTimeout ultrasonic_timeout = UltrasonicTimeout::MINUTES_5;
-  uint16_t color_temperature = 0;
+enum class PacketDirection : uint8_t { REQUEST, REPLY };
+
+struct ReceivedPacket {
+  LampState state;
+  uint8_t command{0}, pcf{0};
+  PacketDirection direction{PacketDirection::REQUEST};
+
+  bool is_reply() const { return direction == PacketDirection::REPLY; }
 };
 
 constexpr Address air_address(const Address &address = RADIO_ADDRESS) {
@@ -86,14 +87,13 @@ inline uint16_t halo_crc(uint8_t pcf, const Payload &payload, const Address &add
   return esphome::crc16be(payload_bytes.data(), payload_bytes.size(), crc, CRC_POLYNOMIAL);
 }
 
-inline Payload make_payload(uint8_t command, const HaloRxState &state, bool auto_brightness = false) {
+inline Payload make_payload(uint8_t command, const LampState &state, bool auto_brightness = false) {
   Payload payload{};
   payload.command = command;
   payload.control.power = state.power;
   payload.control.auto_brightness = auto_brightness;
-  payload.control.mode =
-      state.front && state.back ? LampMode::BOTH : (state.back ? LampMode::BACK_ONLY : LampMode::FRONT_ONLY);
-  payload.control.ultrasonic = state.pir;
+  payload.control.mode = static_cast<uint8_t>(state.selection);
+  payload.control.ultrasonic = state.ultrasonic_enabled;
   payload.front_brightness = state.front_brightness;
   payload.back_brightness = state.back_brightness;
   payload.front_temperature_be = payload.back_temperature_be = esphome::convert_big_endian(state.color_temperature);
@@ -120,9 +120,9 @@ inline AirFrame make_air_frame(uint8_t pcf, const Payload &payload, const Addres
   return air;
 }
 
-inline bool decode_frame(const uint8_t *raw, size_t length, HaloRxState &state, const Address &address = RADIO_ADDRESS,
-                         bool allow_reply = false) {
-  state = {};
+inline bool decode_frame(const uint8_t *raw, size_t length, ReceivedPacket &packet,
+                         const Address &address = RADIO_ADDRESS, bool allow_reply = false) {
+  packet = {};
   if (length != FRAME_SIZE) return false;
   Frame frame;
   std::memcpy(&frame, raw, sizeof(frame));
@@ -134,42 +134,42 @@ inline bool decode_frame(const uint8_t *raw, size_t length, HaloRxState &state, 
       payload.command > MAX_COMMAND_CODE)
     return false;
   if (halo_crc(frame.pcf, payload, address) != esphome::convert_big_endian(frame.crc_be)) return false;
-  const LampMode mode = payload.control.mode;
+  const auto selection = static_cast<LampSelection>(payload.control.mode);
   const uint16_t temperature = esphome::convert_big_endian(payload.front_temperature_be);
-  if (mode > LampMode::BOTH || payload.front_brightness < MIN_BRIGHTNESS_PERCENT ||
-      payload.front_brightness > MAX_BRIGHTNESS_PERCENT || payload.back_brightness < MIN_BRIGHTNESS_PERCENT ||
-      payload.back_brightness > MAX_BRIGHTNESS_PERCENT || temperature < MIN_TEMPERATURE_K ||
-      temperature > MAX_TEMPERATURE_K)
+  if (selection > LampSelection::BOTH || payload.front_brightness < esphome::halo2::MIN_BRIGHTNESS_PERCENT ||
+      payload.front_brightness > esphome::halo2::MAX_BRIGHTNESS_PERCENT ||
+      payload.back_brightness < esphome::halo2::MIN_BRIGHTNESS_PERCENT ||
+      payload.back_brightness > esphome::halo2::MAX_BRIGHTNESS_PERCENT ||
+      temperature < esphome::halo2::MIN_TEMPERATURE_K || temperature > esphome::halo2::MAX_TEMPERATURE_K)
     return false;
-  state.pcf = frame.pcf;
-  state.reply = frame.pcf & PCF_NO_ACK;
-  state.command = payload.command;
+  packet.pcf = frame.pcf;
+  packet.direction = frame.pcf & PCF_NO_ACK ? PacketDirection::REPLY : PacketDirection::REQUEST;
+  packet.command = payload.command;
+  auto &state = packet.state;
   state.power = payload.control.power;
-  state.pir = payload.control.ultrasonic;
-  state.front = mode == LampMode::FRONT_ONLY || mode == LampMode::BOTH;
-  state.back = mode == LampMode::BACK_ONLY || mode == LampMode::BOTH;
+  state.ultrasonic_enabled = payload.control.ultrasonic;
+  state.selection = selection;
   state.front_brightness = payload.front_brightness;
   state.back_brightness = payload.back_brightness;
   state.color_temperature = temperature;
   state.ultrasonic_timeout = payload.ultrasonic_timeout;
-  state.valid = true;
   return true;
 }
 
-inline bool decode_air_frame(const uint8_t *raw, size_t length, HaloRxState &state, const Address &address,
+inline bool decode_air_frame(const uint8_t *raw, size_t length, ReceivedPacket &packet, const Address &address,
                              bool allow_reply = false) {
-  state = {};
+  packet = {};
   if (length != AIR_FRAME_SIZE || (raw[0] & 0x80U)) return false;
   FrameBytes frame{};
   for (size_t i = 0; i < frame.size(); ++i) frame[i] = static_cast<uint8_t>((raw[i] << 1U) | (raw[i + 1] >> 7U));
-  return decode_frame(frame.data(), frame.size(), state, address, allow_reply);
+  return decode_frame(frame.data(), frame.size(), packet, address, allow_reply);
 }
 
 // Discovery uses an alternating preamble byte as the radio sync word, leaving
 // the unknown address in the FIFO. Search every bit phase: sync acquisition
 // can start partway through the preamble, not necessarily on a byte boundary.
-inline bool discover_address(const uint8_t *data, size_t length, Address &address, HaloRxState &state) {
-  state = {};
+inline bool discover_address(const uint8_t *data, size_t length, Address &address, ReceivedPacket &received) {
+  received = {};
   constexpr size_t packet_bits = Address{}.size() * 8 + AIR_FRAME_BITS;
   if (length * 8 < packet_bits) return false;
   std::array<uint8_t, Address{}.size() + AIR_FRAME_SIZE> packet{};
@@ -181,11 +181,11 @@ inline bool discover_address(const uint8_t *data, size_t length, Address &addres
       if (shift && bit / 8 + 1 < length) packet[i] |= data[bit / 8 + 1] >> (8 - shift);
     }
     const Address candidate{packet[3], packet[2], packet[1], packet[0]};
-    if (!decode_air_frame(packet.data() + candidate.size(), AIR_FRAME_SIZE, state, candidate)) continue;
+    if (!decode_air_frame(packet.data() + candidate.size(), AIR_FRAME_SIZE, received, candidate)) continue;
     address = candidate;
     return true;
   }
-  state = {};
+  received = {};
   return false;
 }
 }  // namespace halo2_protocol
