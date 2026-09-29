@@ -116,6 +116,7 @@ Upload updates and view logs with:
 | [`screenbar-halo2-lr1121.yaml`](screenbar-halo2-lr1121.yaml) | Waveshare board configuration and radio wiring |
 | [`scripts/esphome`](scripts/esphome) | Podman wrapper used locally and by CI |
 | [`scripts/test`](scripts/test), [`tests/`](tests/) | Native lamp state model tests |
+| [`tests/hardware/`](tests/hardware/) | Opt-in pytest checks against a deployed bridge and lamp |
 | [`secrets.example.yaml`](secrets.example.yaml) | Credential template |
 | [`home-assistant/dashboard.yaml`](home-assistant/dashboard.yaml) | Optional HA dashboard |
 | [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | Component options, manual addressing, and dashboard setup |
@@ -136,6 +137,16 @@ All C++ sources needed by `halo2` live in its component directory and are copied
 The native tests require a C++20 compiler; set `CXX` to its path if it is not available as `c++`. They have no ESPHome or hardware dependencies.
 
 CI runs the native tests, then uses dummy credentials to compile the Waveshare profile. The wrapper defaults to four compiler processes; override `ESPHOME_DEFAULT_COMPILE_PROCESS_LIMIT` if needed. `ESPHOME_IMAGE` can select another image for compatibility checks.
+
+To test a deployed bridge and its lamp using the native API:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r tests/hardware/requirements.txt
+.venv/bin/python -m pytest tests/hardware -v --halo2-device screenbar-halo2.lan
+```
+
+These tests change light power, brightness, temperature, and ultrasonic settings, and leave the resulting settings in place. They read `api_encryption_key` from `secrets.yaml`; use `--halo2-secrets /path/to/secrets.yaml` for a different credentials file. The deployed firmware must enable DEBUG logs. Assertions wait for fresh lamp readback, so optimistic API updates alone cannot pass them. Without `--halo2-device`, the tests skip; CI checks this default without contacting hardware. Run the hardware suite sequentially against one lamp.
 
 ## Project notes
 

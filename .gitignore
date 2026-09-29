@@ -6,3 +6,5 @@ secrets.yaml
 *.elf
 __pycache__/
 *.py[cod]
+.venv/
+.pytest_cache/
