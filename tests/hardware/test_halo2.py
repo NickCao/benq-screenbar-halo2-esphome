@@ -35,6 +35,34 @@ async def test_color_temperature_output_conversion(lamp, temperature):
     await lamp.wait_readback(since, front_brightness=37, temperature=4500)
 
 
+async def test_temperature_rounding_preserves_peer_transition(lamp):
+    since = monotonic()
+    lamp.light("Front lamp", state=True, brightness=.37, color_temperature=1_000_000 / 4500)
+    lamp.light("Back lamp", state=True, brightness=.62, color_temperature=1_000_000 / 4500)
+    await lamp.wait_readback(
+        since, power=True, front=True, back=True, front_brightness=37,
+        back_brightness=62, temperature=4500,
+    )
+    transition_length = 4
+    started = monotonic()
+    lamp.light("Back lamp", brightness=.20, transition_length=transition_length)
+    await asyncio.sleep(.25)
+    # This rounds to the existing shared setting. Correcting the front entity
+    # must not mirror an unchanged temperature and end the rear's fade early.
+    lamp.light("Front lamp", color_temperature=1_000_000 / 4503)
+    await lamp.wait_light_state("Front lamp", color_temperature=1_000_000 / 4500)
+    await lamp.wait_readback(
+        started, power=True, front=True, back=True, front_brightness=37,
+        back_brightness=20, temperature=4500,
+    )
+    # Fresh readback is deferred while ESPHome's transition is active.
+    assert monotonic() - started >= transition_length - .5
+
+    since = monotonic()
+    lamp.light("Back lamp", brightness=.62)
+    await lamp.wait_readback(since, back_brightness=62, temperature=4500)
+
+
 @pytest.mark.parametrize("on,brightness", [(False, .62), (True, .20)], ids=["off", "dim"])
 async def test_shared_temperature_reconciles_a_peer_fade(lamp, on, brightness):
     lamp.light("Back lamp", state=on, brightness=brightness, transition_length=2)

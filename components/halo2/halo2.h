@@ -43,7 +43,7 @@ class Halo2 : public PollingComponent {
   void start_auto_brightness();
 
   bool accepts_commands() const { return lifecycle_.active(); }
-  void control_light(Section section);
+  void control_light(Halo2Light &source);
   void control_ultrasonic(size_t index);
   void resend() {
     if (accepts_commands()) commands_.resend();
@@ -125,31 +125,31 @@ class Halo2Light : public light::LightOutput, public Parented<Halo2> {
     state_ = state;
     parent_->set_light(this, section_);
   }
-  void restore_into(LampState &state) const;
-  void read_into(LampState &state) const;
-  void publish(const LampState &state);
-  void retain_brightness(const LampState &state);
-  void set_temperature(uint16_t temperature);
-  bool needs_temperature_sync(uint16_t temperature) const;
-  bool transitioning() const;
   void update_state(light::LightState *) override {
     // Capture local commands immediately, before polling can receive a packet.
     // The guard also prevents received state from becoming a new transmission.
-    forward_update_ = !publishing_ && parent_->accepts_commands();
-    if (forward_update_) parent_->control_light(section_);
+    local_write_ = !reflecting_state_ && parent_->accepts_commands();
+    if (local_write_) parent_->control_light(*this);
   }
   void write_state(light::LightState *) override {
     // ESPHome installs the final transition values after update_state().
     // Reconcile those here, retaining the origin of the deferred write.
-    if (forward_update_) parent_->control_light(section_);
-    forward_update_ = false;
+    if (local_write_) parent_->control_light(*this);
+    local_write_ = false;
   }
 
  protected:
+  friend class Halo2;
+  void restore_into(LampState &state) const;
+  void read_into(LampState &state) const;
+  void publish(const LampState &state);
+  void sync_temperature(uint16_t temperature);
+  bool transitioning() const;
+
   Section section_;
   light::LightState *state_{nullptr};
-  bool forward_update_{false};
-  bool publishing_{false};
+  bool local_write_{false};
+  bool reflecting_state_{false};
 };
 
 class Halo2UltrasonicSelect : public select::Select, public Parented<Halo2> {

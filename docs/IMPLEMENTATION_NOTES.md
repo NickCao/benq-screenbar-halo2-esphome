@@ -10,7 +10,7 @@ The bridge follows the [ESPHome external-component layout](https://esphome.io/co
 | `lamp_state.h` | Lamp settings, section/brightness rules, and requested versus observed state; independent of ESPHome and radio metadata |
 | `command_queue.h` | Changed settings to command batches, coalescing, Auto brightness intent, TX completion, and cooldown; independent of ESPHome |
 | `bridge_state.h` | Lifecycle and status-poll state machines plus a scoped publication guard; independent of ESPHome |
-| `halo2_light.cpp` | ESPHome light conversion, preference restoration, publication, and transition handling |
+| `halo2_light.cpp` | ESPHome light conversion, shared-temperature coordination, preference restoration, and readback |
 | `halo2.h`, `halo2.cpp` | Component wiring, event routing, radio I/O, preference storage, and discovery coordination |
 | `halo2_protocol.h` | Packed payload/frame structs, CRC, canonical/air-frame conversion, validation, and address extraction; uses ESPHome's CRC, byte-order, and bit-casting helpers |
 | `lr1121_radio.h` | LR1121 command/packet handling using ESPHome `SPIDevice` and GPIO |
@@ -36,7 +36,7 @@ Packet command, PCF, and request/reply direction belong to `ReceivedPacket`, alo
 
 There is no master Power entity. Turning one section off while the other remains on changes selection. Turning off the last section requires global power OFF. `LampState::set_light()` centralizes these rules and retains each section's last nonzero brightness. The light adapter also restores that brightness to ESPHome after an immediate zero-brightness OFF request, so a following plain ON uses the retained value.
 
-Each light adapter identifies its entity with `Section::FRONT` or `Section::BACK` and owns its ESPHome state pointer and publication guard. It translates framework values into lamp settings and projects received settings back into the entity. The bridge works with those settings rather than reading ESPHome's current and remote values itself.
+Each light adapter identifies its entity with `Section::FRONT` or `Section::BACK` and owns its ESPHome state pointer and reflection guard. Conversion, shared-temperature coordination, and projecting received settings back into the entities live together in `halo2_light.cpp`. The adapter's conversion and reflection methods are internal to the bridge; its public interface implements ESPHome's `LightOutput` callbacks.
 
 Hardware output uses ESPHome's `current_values_as_ct()` helper, which applies the light's on/off factor and gamma correction to brightness. Its temperature output is normalized across the declared mired range; the adapter converts it to Kelvin and rounds to the lamp's 25 K steps. Remote brightness is used only to retain the next ON level when effective output is zero.
 
@@ -60,7 +60,7 @@ This ordering makes consecutive front/back commands from HA's group or “all li
 
 LR1121 queues the complete one- or two-packet batch before starting it. **Command sent** is published and the cooldown starts only after every packet reports TX_DONE. New HA requests can update the pending state while that batch is in flight. Received frames cannot overwrite pending commands.
 
-Each light adapter publishes received state under its own scoped guard, preventing the resulting callbacks from submitting another request. Shared-temperature synchronization uses the same guarded entity operation. The bridge reads the peer's final values after mirroring and merges them into one request; it does not re-enter the peer's control handler. Nested guards restore their previous value when leaving scope. Publication does not change the lifecycle state. The light adapter also tracks whether a deferred write originated locally, so an incoming radio update is not echoed later.
+Each light adapter reflects received state under its own scoped guard, preventing the resulting callbacks from submitting another request. Its `local_write_` flag preserves that distinction until ESPHome's deferred `write_state()` callback. Shared-temperature synchronization checks and applies a change in one guarded operation, skipping matching current and target values. The peer is synchronized only when the shared setting changes; rounding a source entity's temperature to an unchanged lamp setting therefore leaves a peer fade running. When mirroring ends a peer fade, its resulting values are merged into the same request. A source that is not fading also receives its canonical temperature or retained OFF brightness. Nested guards restore their previous value when leaving scope; reflection does not change the radio lifecycle.
 
 Polling also checks for divergent ESPHome current and remote values, covering a newly requested fade before ESPHome sets its transformer-active flag on the first loop.
 
@@ -118,7 +118,7 @@ The [protocol reference](PROTOCOL.md#framing-and-packet-control-field) is the so
 
 **Command sent** means the radio completed transmission and reported TX_DONE, not that a visible lamp change was confirmed. **Lamp status received** means a refresh/read polling cycle returned validated lamp state.
 
-The opt-in [pytest hardware suite](../tests/hardware/) sends native API commands and checks fresh lamp readback in DEBUG logs. It covers independent brightness, color-temperature conversion at both limits and an interior value, shared temperature during a peer fade, grouped on/off in both arrival orders, section selection, zero-brightness OFF followed by plain ON, combined power/presence/timeout changes, full resend while off, and all ultrasonic timeout options. It also checks HA entity values for retained brightness and shared temperature. These tests operate the lamp and require an explicit `--halo2-device`; ordinary test runs skip them.
+The opt-in [pytest hardware suite](../tests/hardware/) sends native API commands and checks fresh lamp readback in DEBUG logs. It covers independent brightness, color-temperature conversion at both limits and an interior value, shared temperature during a peer fade, preserving a peer fade during temperature rounding, grouped on/off in both arrival orders, section selection, zero-brightness OFF followed by plain ON, combined power/presence/timeout changes, full resend while off, and all ultrasonic timeout options. It also checks HA entity values for retained brightness and shared temperature. These tests operate the lamp and require an explicit `--halo2-device`; ordinary test runs skip them.
 
 The original controller sends settings snapshots, so a later valid request can recover missed updates. LR1121 polling also catches autonomous presence changes, Auto brightness adjustments, and missed requests. Collisions, range, or a disconnected lamp can delay synchronization; polling retains the last known state until a reply arrives.
 

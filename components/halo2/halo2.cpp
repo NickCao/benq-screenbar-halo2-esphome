@@ -243,8 +243,9 @@ void Halo2::request_state_(const LampState &requested) {
 
 bool Halo2::send_state_(Command command, bool auto_brightness) {
   const auto &requested = lamp_state_.requested();
-  ESP_LOGD(TAG, "TX command 0x%02X, power %s, mode %u/%u", command, ONOFF(requested.power),
-           requested.selected(Section::FRONT), requested.selected(Section::BACK));
+  ESP_LOGD(TAG, "TX command 0x%02X, power %s, mode %u/%u, front %u%%, back %u%%, %u K", command, ONOFF(requested.power),
+           requested.selected(Section::FRONT), requested.selected(Section::BACK), requested.front_brightness,
+           requested.back_brightness, requested.color_temperature);
   const auto payload = protocol::make_payload(command, requested, auto_brightness);
   last_pcf_ = protocol::request_pcf(app_pid_++);
   return radio_.send(protocol::make_air_frame(last_pcf_, payload, radio_.address()));
@@ -253,24 +254,6 @@ bool Halo2::send_state_(Command command, bool auto_brightness) {
 void Halo2::start_auto_brightness() {
   if (!accepts_commands()) return;
   commands_.auto_brightness();
-}
-
-void Halo2::control_light(Section section) {
-  if (!accepts_commands()) return;
-  auto *source = lights_[static_cast<size_t>(section)];
-  auto requested = lamp_state_.requested();
-  source->read_into(requested);
-  const auto temperature = requested.color_temperature;
-  if (temperature != lamp_state_.requested().color_temperature || source->needs_temperature_sync(temperature)) {
-    for (auto *light : lights_) {
-      if (light != source || !light->transitioning()) light->set_temperature(temperature);
-    }
-    // Mirroring ends a simultaneous peer fade. Merge its final light values
-    // into the same request; publication callbacks never submit new intent.
-    lights_[section == Section::FRONT ? 1 : 0]->read_into(requested);
-  }
-  request_state_(requested);
-  source->retain_brightness(requested);
 }
 
 void Halo2::control_ultrasonic(size_t index) {

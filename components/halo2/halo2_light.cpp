@@ -44,7 +44,7 @@ void Halo2Light::read_into(LampState &state) const {
 }
 
 void Halo2Light::publish(const LampState &state) {
-  ScopedPublication guard(publishing_);
+  ScopedPublication guard(reflecting_state_);
   auto call = state_->make_call();
   call.set_state(state.is_on(section_));
   call.set_brightness(state.brightness(section_) / 100.0f);
@@ -54,28 +54,44 @@ void Halo2Light::publish(const LampState &state) {
   call.perform();
 }
 
-void Halo2Light::retain_brightness(const LampState &state) {
-  // A following plain ON must use the retained level rather than ESPHome's
-  // fallback for a zero remote brightness. Never interrupt a fade here.
-  if (!transitioning() && state_->remote_values.get_brightness() == 0) publish(state);
-}
-
-void Halo2Light::set_temperature(uint16_t temperature) {
-  ScopedPublication guard(publishing_);
+void Halo2Light::sync_temperature(uint16_t temperature) {
+  const float mireds = 1000000.0f / temperature;
+  if (state_->current_values.get_color_temperature() == mireds &&
+      state_->remote_values.get_color_temperature() == mireds)
+    return;
+  ScopedPublication guard(reflecting_state_);
   auto call = state_->make_call();
-  call.set_color_temperature(1000000.0f / temperature);
+  call.set_color_temperature(mireds);
   call.set_transition_length(0);
   call.perform();
-}
-
-bool Halo2Light::needs_temperature_sync(uint16_t temperature) const {
-  return !transitioning() && state_->current_values.get_color_temperature() != 1000000.0f / temperature;
 }
 
 bool Halo2Light::transitioning() const {
   // ESPHome sets its active flag on the first loop after starting a fade.
   // Divergent current/remote values cover the interval before that loop.
   return state_->is_transformer_active() || state_->current_values != state_->remote_values;
+}
+
+void Halo2::control_light(Halo2Light &source) {
+  if (!accepts_commands()) return;
+  auto requested = lamp_state_.requested();
+  source.read_into(requested);
+  const auto temperature = requested.color_temperature;
+  if (temperature != lamp_state_.requested().color_temperature) {
+    auto *peer = lights_[source.section_ == Section::FRONT ? 1 : 0];
+    peer->sync_temperature(temperature);
+    // Mirroring can finish a peer fade. Include its resulting values in the
+    // same request; the guarded callbacks cannot submit another command.
+    peer->read_into(requested);
+  }
+  request_state_(requested);
+  if (source.transitioning()) return;
+  // Repair zero-brightness OFF immediately so a following plain ON uses the
+  // retained level. Otherwise only canonicalize the source's temperature.
+  if (source.state_->remote_values.get_brightness() == 0)
+    source.publish(requested);
+  else
+    source.sync_temperature(temperature);
 }
 
 bool Halo2::lights_transitioning_() const { return lights_[0]->transitioning() || lights_[1]->transitioning(); }
