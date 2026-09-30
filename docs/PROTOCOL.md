@@ -82,7 +82,29 @@ All currently supported requests carry a full ten-byte snapshot, including statu
 
 Brightness fields retain nonzero values while power is off. The bridge never uses zero brightness as a wire-level OFF command. It represents temperature as one shared setting, writes both fields identically, and rounds outgoing values to 25 K steps within 2700–6500 K (`0A 8C`–`19 64`).
 
-During Auto adjustment, the rear temperature field has been observed to lag the front field. The bridge takes the front field as authoritative. Two fields in the packet do not by themselves establish support for independently controlled color temperatures; unequal-temperature command behavior has not been characterized.
+During Auto adjustment, the rear temperature field has been observed to lag the front field. The bridge takes the front field as authoritative. The unequal-temperature experiment below found that command `03` retained both fields in replies while visible color followed the first field, including with only the rear section selected.
+
+### Unequal-temperature experiment, 2026-09-29
+
+A temporary probe build sent command `03` with opposite temperature extremes, manual brightness at 70%, presence disabled, and either both sections or only the rear selected. It changed the rear payload field directly, bypassing the bridge's shared-temperature conversion. Fresh replies came from the normal refresh/read cycle; an independent bitwise CRC check against the learned radio address passed for all 16 distinct captured status frames.
+
+| Selection | First temperature field | Rear temperature field | Fresh reply fields | User's visual observation |
+|---|---|---|---|---|
+| Both | 2700 K | 6500 K | 2700 / 6500 K | Both warm/yellow |
+| Both | 6500 K | 2700 K | 6500 / 2700 K | Both cool/white |
+| Rear only | 2700 K | 6500 K | 2700 / 6500 K | Rear warm/yellow |
+| Rear only | 6500 K | 2700 K | 6500 / 2700 K | Rear cool/white |
+
+Captured canonical status frames, including PCF and CRC, for those four cases:
+
+```text
+57 04 11 46 0A 8C 46 19 64 00 02 6C 8E
+57 04 11 46 19 64 46 0A 8C 00 02 8C E6
+57 04 09 46 0A 8C 46 19 64 00 02 16 8F
+57 04 09 46 19 64 46 0A 8C 00 02 F6 E7
+```
+
+The observed output supports treating the first field as shared temperature for manual `03` settings on this unit. Retaining the rear field in a reply does not establish that it controls an independent rear output. Its purpose under other commands or modes remains unknown; this experiment does not establish that it is unused throughout the protocol.
 
 ### Control byte
 
@@ -233,7 +255,7 @@ Rejected does not mean invalid BenQ traffic. The observed `0B` packet is one con
 | Favorites | Bit 2's action/status meaning, save versus recall, and where presets are stored | Separate captures for saving and recalling different presets |
 | Auto mode | Whether bit 1 is only a trigger or also a durable state, and how to identify completion | Follow replies while changing ambient light and while returning to manual control |
 | Field write masks | Which fields `02`, `03`, `04`, and `05` apply or persist beyond the verified effects | Change one field at a time under each command and obtain fresh lamp replies |
-| Temperature | Whether unequal front/back fields can ever control independent temperatures; the exact cause of reply-field lag | Controlled unequal-temperature requests plus observations of both light outputs |
+| Temperature | The rear field's purpose under other commands/modes and the exact cause of reply-field lag; unequal `03` fields did not produce independent visible temperatures on the tested unit | Vary the rear field alone under other commands/modes and observe physical output alongside fresh replies |
 | Unknown bits/values | Control bits 6–7, selection `3`, suffix `02`, timeout values above `3`, and other payload lengths | Captures from other functions/revisions before relaxing decoder checks |
 | ACKs and timing | Payload queue depth, minimum settle time, controller retransmission/deduplication rules, and behavior with overlapping PIDs | Timestamped bidirectional captures with controlled loss, duplicates, and concurrent traffic |
 | Presence timing | Exact timer reset/retrigger rules, countdown/occupancy telemetry, and persistence across lamp power loss | Timed motion/no-motion and power-cycle observations alongside packet capture |

@@ -42,7 +42,7 @@ Hardware output uses ESPHome's `current_values_as_ct()` helper, which applies th
 
 Light and ultrasonic controls pass their updated settings through `request_state_()`. It gives the before/after settings to `CommandQueue`, then updates requested state and preferences. The queue determines which operations are required; the radio path takes a batch and sends its commands without deciding their meaning or order.
 
-Color temperature is one logical setting and is mirrored between the two light entities. The payload contains two temperature fields; the bridge writes the same value to both. Behavior with unequal outgoing temperature fields has not been characterized.
+Color temperature is one logical setting and is mirrored between the two light entities. The payload contains two temperature fields; the bridge writes the same value to both. A hardware experiment with unequal `0x03` fields found that visible color followed the first field for both sections and for the rear alone, even though replies retained both values. See the [temperature experiment](PROTOCOL.md#unequal-temperature-experiment-2026-09-29) for the captures and limits of that finding.
 
 Commands arriving before the next 50 ms update are combined into the shared state. The first command is eligible immediately. Following a completed command batch, `command_debounce` imposes a one-second default cooldown; further requests are combined and the next required command uses the latest state when that fixed interval expires:
 
