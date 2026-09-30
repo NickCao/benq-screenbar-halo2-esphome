@@ -31,13 +31,16 @@ void Halo2Light::restore_into(LampState &state) const {
 }
 
 void Halo2Light::read_into(LampState &state) const {
-  const auto &values = state_->current_values;
+  float temperature = 0, brightness = 0;
+  state_->current_values_as_ct(&temperature, &brightness);
+  const auto traits = state_->get_traits();
+  const float mireds = std::lerp(traits.get_min_mireds(), traits.get_max_mireds(), temperature);
   // The final fade-out sample has zero brightness. Retain the remote level
   // for OFF, and let LampState preserve it when the remote level is also zero.
-  const bool on = values.is_on() && values.get_brightness() > 0;
-  const auto brightness = on ? values.get_brightness() : state_->remote_values.get_brightness();
+  const bool on = brightness > 0;
+  if (!on) brightness = state_->remote_values.get_brightness();
   state.set_light(section_, on, brightness_percent(brightness));
-  state.color_temperature = temperature_kelvin(values.get_color_temperature());
+  state.color_temperature = temperature_kelvin(mireds);
 }
 
 void Halo2Light::publish(const LampState &state) {

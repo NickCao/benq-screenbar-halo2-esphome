@@ -19,6 +19,22 @@ async def test_independent_brightness_and_shared_temperature(lamp):
         await lamp.wait_light_state(name, color_temperature=1_000_000 / 4500)
 
 
+@pytest.mark.parametrize("temperature", [2700, 3925, 6500])
+async def test_color_temperature_output_conversion(lamp, temperature):
+    since = monotonic()
+    lamp.light("Front lamp", state=True, brightness=.43, color_temperature=1_000_000 / temperature)
+    await lamp.wait_readback(
+        since, power=True, front=True, back=True, front_brightness=43,
+        back_brightness=62, temperature=temperature,
+    )
+    for name in ("Front lamp", "Back lamp"):
+        await lamp.wait_light_state(name, color_temperature=1_000_000 / temperature)
+
+    since = monotonic()
+    lamp.light("Front lamp", brightness=.37, color_temperature=1_000_000 / 4500)
+    await lamp.wait_readback(since, front_brightness=37, temperature=4500)
+
+
 @pytest.mark.parametrize("on,brightness", [(False, .62), (True, .20)], ids=["off", "dim"])
 async def test_shared_temperature_reconciles_a_peer_fade(lamp, on, brightness):
     lamp.light("Back lamp", state=on, brightness=brightness, transition_length=2)
