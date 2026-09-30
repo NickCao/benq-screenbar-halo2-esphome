@@ -25,6 +25,7 @@ coordinator's protected state.
   work. Recovery reads a new baseline without replaying commands.
 - Discovery during a command or status transmission ignores the old completion,
   blocks local commands, and resumes polling on the newly discovered address.
+  This includes discovery between the two frames of a power-on batch.
 - Recovery during discovery restarts the scan with a new dwell timer.
 - Missing replies retain entity state, raise a warning after three failed cycles,
   and clear the failure count after a successful read.

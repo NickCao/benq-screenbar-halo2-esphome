@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <utility>
 #include "esphome/core/application.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
@@ -59,11 +60,18 @@ void Halo2::start_radio_() {
   if (!radio_.setup(frequency_deviation_, pulse_shape_, radio_address_, radio_channel_)) recover_radio_();
 }
 
+void Halo2::cancel_requests_() {
+  commands_.clear();
+  status_poll_.cancel();
+  // The driver may still finish a submitted batch during discovery. Its
+  // completion no longer belongs to an active command or polling request.
+  tx_owner_ = TxOwner::NONE;
+}
+
 void Halo2::recover_radio_() {
   if (!lifecycle_.on_radio_failure()) return;
   // Never replay an interrupted command batch after reconnecting to the lamp.
-  commands_.clear();
-  status_poll_.cancel();
+  cancel_requests_();
   cancel_timeout("discovery_dwell");
   lamp_state_.invalidate();
   status_set_warning();
@@ -87,8 +95,7 @@ void Halo2::publish_address_() {
 
 void Halo2::start_discovery() {
   if (!lifecycle_.begin_discovery()) return;
-  commands_.clear();
-  status_poll_.cancel();
+  cancel_requests_();
   cancel_timeout("discovery_dwell");
   lamp_state_.invalidate();
   candidates_ = {};
@@ -142,12 +149,19 @@ void Halo2::loop() {
     radio_ready_();
   }
   if (radio_.take_tx_done()) {
-    if (commands_.on_tx_done(millis())) {
-      status_clear_warning();
-      publish_status_("Command sent");
-      status_poll_.schedule(millis(), StatusPoll::SETTLE_MS);
-    } else {
-      status_poll_.on_tx_done(millis());
+    const uint32_t now = millis();
+    switch (std::exchange(tx_owner_, TxOwner::NONE)) {
+      case TxOwner::COMMAND:
+        commands_.on_tx_done(now);
+        status_poll_.schedule(now, StatusPoll::SETTLE_MS);
+        status_clear_warning();
+        publish_status_("Command sent");
+        break;
+      case TxOwner::STATUS_POLL:
+        status_poll_.on_tx_done(now);
+        break;
+      case TxOwner::NONE:
+        break;
     }
   }
   if (lifecycle_.discovering()) {
@@ -241,6 +255,15 @@ void Halo2::request_state_(const LampState &requested) {
   save_mode_();
 }
 
+bool Halo2::send_batch_(std::span<const protocol::AirFrame> frames, TxOwner owner) {
+  if (tx_owner_ != TxOwner::NONE || !radio_.send_batch(frames)) {
+    recover_radio_();
+    return false;
+  }
+  tx_owner_ = owner;
+  return true;
+}
+
 protocol::AirFrame Halo2::make_frame_(Command command, bool auto_brightness) {
   const auto &requested = lamp_state_.requested();
   ESP_LOGD(TAG, "TX command 0x%02X, power %s, mode %u/%u, front %u%%, back %u%%, %u K", command, ONOFF(requested.power),
@@ -309,8 +332,7 @@ void Halo2::update() {
 }
 
 void Halo2::process_radio_() {
-  if (!lifecycle_.linked()) return;
-  if (commands_.transmitting() || status_poll_.transmitting()) return;
+  if (!lifecycle_.linked() || tx_owner_ != TxOwner::NONE) return;
   if (commands_.pending()) {
     send_commands_();
     return;
@@ -328,7 +350,7 @@ void Halo2::send_commands_() {
   std::transform(batch->begin(), batch->end(), frames.begin(), [this, &batch](Command command) {
     return make_frame_(command, batch->auto_brightness && command == Command::SETTINGS);
   });
-  if (!radio_.send_batch(std::span(frames).first(batch->count))) recover_radio_();
+  send_batch_(std::span(frames).first(batch->count), TxOwner::COMMAND);
 }
 
 void Halo2::receive_packet_() {
@@ -377,10 +399,8 @@ void Halo2::poll_status_() {
   if (!status_poll_.due(now) || lights_transitioning_() || !radio_.idle()) return;
   ESP_LOGD(TAG, "%s lamp status", status_poll_.reading() ? "Reading" : "Refreshing");
   const std::array<protocol::AirFrame, 1> frames{make_frame_(Command::STATUS)};
-  if (radio_.send_batch(frames)) {
+  if (send_batch_(frames, TxOwner::STATUS_POLL)) {
     status_poll_.begin_request(last_pcf_ & protocol::PCF_PID_MASK);
-  } else {
-    recover_radio_();
   }
 }
 

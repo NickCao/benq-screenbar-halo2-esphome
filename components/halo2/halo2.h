@@ -1,5 +1,6 @@
 #pragma once
 
+#include <span>
 #include "esphome/core/component.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/preferences.h"
@@ -52,6 +53,7 @@ class Halo2 : public PollingComponent {
  protected:
   // Persisted selection is a bitmask, distinct from LampSelection's wire values.
   enum SavedMode : uint8_t { NONE = 0, FRONT = 1, BACK = 2, BOTH = FRONT | BACK };
+  enum class TxOwner { NONE, COMMAND, STATUS_POLL };
   static constexpr uint32_t RECOVERY_INITIAL_DELAY_MS = 1000;
 
   void request_state_(const LampState &requested);
@@ -71,6 +73,8 @@ class Halo2 : public PollingComponent {
   void start_radio_();
   void radio_ready_();
   void recover_radio_();
+  void cancel_requests_();
+  bool send_batch_(std::span<const halo2_protocol::AirFrame> frames, TxOwner owner);
   halo2_protocol::AirFrame make_frame_(Command command, bool auto_brightness = false);
 
   struct SavedLink {
@@ -104,6 +108,7 @@ class Halo2 : public PollingComponent {
   bool auto_discover_{false};
   BridgeLifecycle lifecycle_;
   LR1121Radio radio_;
+  TxOwner tx_owner_{TxOwner::NONE};
   uint8_t app_pid_{0};
   uint8_t last_pcf_{0};
   uint32_t recovery_delay_{RECOVERY_INITIAL_DELAY_MS};

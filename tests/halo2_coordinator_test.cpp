@@ -129,11 +129,14 @@ static void failure_between_power_on_packets_discards_the_batch_and_pending_inte
   CHECK(f.chip.transmissions.size() == count + 2);  // Recovery only queried; it replayed no commands.
 }
 
-static void discovery_during_tx_discards_old_work_and_ignores_its_completion(bool command_tx) {
+static void discovery_during_tx_discards_old_work_and_ignores_its_completion(Command command) {
   BridgeFixture f;
-  f.establish_baseline(baseline());
-  if (command_tx) {
-    f.front.make_call().set_brightness(.55f).perform();
+  f.establish_baseline(baseline(command != Command::POWER));
+  if (command != Command::STATUS) {
+    if (command == Command::POWER)
+      f.front.make_call().set_state(true).perform();
+    else
+      f.front.make_call().set_brightness(.55f).perform();
     f.next_tx(Command::SETTINGS);
     f.bridge.control_ultrasonic(4);
   } else {
@@ -142,11 +145,19 @@ static void discovery_during_tx_discards_old_work_and_ignores_its_completion(boo
     f.reply(baseline());
     f.next_tx(Command::STATUS);
   }
-  const size_t count = f.chip.transmissions.size();
+  const size_t count = f.chip.transmissions.size() + (command == Command::POWER ? 1 : 0);
   f.bridge.start_discovery();
   CHECK(!f.bridge.accepts_commands());
   f.bridge.resend();
   f.reply(baseline(false));
+  if (command == Command::POWER) {
+    // The driver finishes the submitted batch before entering discovery.
+    // Neither packet's completion may report success for canceled work.
+    f.next_tx(Command::POWER);
+    CHECK(!f.bridge.accepts_commands());
+    CHECK(f.status_count("Command sent") == 0);
+    f.reply(baseline(false));
+  }
   f.wait_until([&]() { return f.chip.receiving && f.chip.rx_length == LR1121Radio::DISCOVERY_RX_BYTES; });
   CHECK(f.status_count("Command sent") == 0);
   CHECK(f.chip.transmissions.size() == count);
@@ -349,8 +360,12 @@ int main() {
   run("command during read TX", []() { a_command_during_status_tx_takes_priority_over_the_stale_reply(true); });
   run("batch completion and queued intent", new_intent_during_a_batch_waits_for_both_packets_and_the_cooldown);
   run("failure between power-on packets", failure_between_power_on_packets_discards_the_batch_and_pending_intent);
-  run("discovery during command TX", []() { discovery_during_tx_discards_old_work_and_ignores_its_completion(true); });
-  run("discovery during read TX", []() { discovery_during_tx_discards_old_work_and_ignores_its_completion(false); });
+  run("discovery during command TX",
+      []() { discovery_during_tx_discards_old_work_and_ignores_its_completion(Command::SETTINGS); });
+  run("discovery during read TX",
+      []() { discovery_during_tx_discards_old_work_and_ignores_its_completion(Command::STATUS); });
+  run("discovery during power-on batch",
+      []() { discovery_during_tx_discards_old_work_and_ignores_its_completion(Command::POWER); });
   run("discovery recovery and dwell timer", discovery_recovery_restarts_the_scan_and_cancels_the_old_dwell);
   run("poll failures and recovery", missed_polls_retain_state_and_a_fresh_reply_clears_the_warning);
   run("controller update without echo", controller_updates_publish_without_echo_and_request_a_fresh_poll);
