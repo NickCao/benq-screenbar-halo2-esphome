@@ -1,9 +1,11 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
+#include <span>
 #include "esphome/components/spi/spi.h"
 #include "esphome/core/gpio.h"
 #include "esphome/core/hal.h"
@@ -125,22 +127,16 @@ class LR1121Radio : public spi::SPIDevice<spi::BIT_ORDER_MSB_FIRST, spi::CLOCK_P
       if (!advance_()) break;
   }
 
-  // Queue one frame, or append the second half of a power-on batch before
-  // loop() starts it. Completion is reported only after the whole batch.
-  bool send(const halo2_protocol::AirFrame &frame) {
-    if (!ready_ || discovering_) return false;
-    if (operation_ == Operation::TRANSMIT && job_index_ == 0 && !response_phase_ && tx_frame_index_ == 0 &&
-        tx_frame_count_ == 1) {
-      tx_frames_[tx_frame_count_++] = frame;
-      return true;
-    }
-    if (!idle()) return false;
+  // Copy the complete one- or two-frame batch before starting it. A batch
+  // cannot be extended in flight; completion covers all submitted frames.
+  bool send_batch(std::span<const halo2_protocol::AirFrame> frames) {
+    if (!ready_ || discovering_ || !idle() || frames.empty() || frames.size() > tx_frames_.size()) return false;
     rx_pending_ = false;
     needs_receive_ = false;
     tx_completed_ = false;
-    tx_frames_[0] = frame;
+    std::copy(frames.begin(), frames.end(), tx_frames_.begin());
     tx_frame_index_ = 0;
-    tx_frame_count_ = 1;
+    tx_frame_count_ = frames.size();
     transmit_commands_();
     return operation_ != Operation::FAILED;
   }

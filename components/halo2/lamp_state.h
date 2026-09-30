@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <optional>
 
 namespace esphome::halo2 {
 
@@ -55,12 +54,11 @@ struct LampState {
   }
 };
 
-// Requests drive outgoing commands and the optimistic UI. Only accepted lamp
-// status replies establish an observation; controller requests remain intent.
+// Requested settings drive outgoing commands and the optimistic UI. Received
+// snapshots establish a baseline and reconcile those settings with the lamp.
 class LampStateModel {
  public:
   const LampState &requested() const { return requested_; }
-  const std::optional<LampState> &observed() const { return observed_; }
   bool initialized() const { return initialized_; }
 
   void restore(const LampState &state) {
@@ -69,23 +67,18 @@ class LampStateModel {
   }
   void request(const LampState &state) { requested_ = state; }
   bool receive_request(const LampState &state) { return apply_received_(state); }
-  bool observe(const LampState &state) {
-    observed_ = state;
+  bool receive_status(const LampState &state) {
     auto reconciled = state;
     // Settings packets only apply brightness to selected sections. Keep an
-    // inactive section's requested level for its next ON, while recording
-    // the lamp's actual stored level in observed_. A new baseline uses all
-    // received values, as do snapshots from the original controller.
+    // inactive section's requested level for its next ON. A new baseline
+    // uses all received values, as do original-controller snapshots.
     if (initialized_) {
       if (!state.selected(Section::FRONT)) reconciled.front_brightness = requested_.front_brightness;
       if (!state.selected(Section::BACK)) reconciled.back_brightness = requested_.back_brightness;
     }
     return apply_received_(reconciled);
   }
-  void invalidate() {
-    initialized_ = false;
-    observed_.reset();
-  }
+  void invalidate() { initialized_ = false; }
 
  private:
   bool apply_received_(const LampState &state) {
@@ -96,7 +89,6 @@ class LampStateModel {
   }
 
   LampState requested_;
-  std::optional<LampState> observed_;
   bool initialized_{false};
 };
 

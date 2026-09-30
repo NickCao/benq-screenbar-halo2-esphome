@@ -31,69 +31,64 @@ static void restored_settings_require_received_state() {
   model.restore(saved);
   CHECK(model.requested() == saved);
   CHECK(!model.initialized());
-  CHECK(!model.observed());
 
   auto local = saved;
   local.set_light(Section::FRONT, true, 55);
   model.request(local);
   CHECK(!model.initialized());
-  CHECK(!model.observed());
 
   // Hearing the controller establishes settings for further commands, but
   // does not prove that the lamp applied them.
   CHECK(model.receive_request(saved));
   CHECK(model.initialized());
   CHECK(model.requested() == saved);
-  CHECK(!model.observed());
   CHECK(!model.receive_request(saved));
 }
 
-static void requests_do_not_mutate_confirmed_settings() {
+static void controller_snapshots_replace_local_requests() {
   LampStateModel model;
   const auto confirmed = initial_state();
-  CHECK(model.observe(confirmed));
+  CHECK(model.receive_status(confirmed));
 
   auto local = confirmed;
   local.set_light(Section::FRONT, false, 0);
   model.request(local);
   CHECK(model.requested().selection == LampSelection::BACK_ONLY);
-  CHECK(model.observed() == confirmed);
+  CHECK(model.requested() == local);
 
   auto controller = local;
   controller.back_brightness = 25;
   CHECK(model.receive_request(controller));
-  CHECK(model.requested().back_brightness == 25);
-  CHECK(model.observed() == confirmed);
-
-  // Confirmation of an optimistic update still records an observation,
-  // even though the UI no longer needs to change.
-  CHECK(!model.observe(controller));
-  CHECK(model.observed() == controller);
+  CHECK(model.requested() == controller);
 }
 
-static void first_confirmation_records_unchanged_settings() {
+static void matching_status_only_republishes_when_establishing_a_baseline() {
   LampStateModel model;
   const auto controller = initial_state();
   CHECK(model.receive_request(controller));
-  CHECK(!model.observed());
-  CHECK(!model.observe(controller));
-  CHECK(model.observed() == controller);
+  CHECK(!model.receive_status(controller));
+  CHECK(model.requested() == controller);
+
+  model.restore(controller);
+  CHECK(model.receive_status(controller));
+  CHECK(model.initialized());
+  CHECK(!model.receive_status(controller));
 }
 
 static void lamp_readback_reconciles_a_failed_request() {
   LampStateModel model;
   const auto actual = initial_state();
-  model.observe(actual);
+  model.receive_status(actual);
   auto desired = actual;
   desired.power = false;
   desired.ultrasonic_enabled = false;
   model.request(desired);
 
-  CHECK(model.observe(actual));
+  CHECK(model.receive_status(actual));
   CHECK(model.requested().power);
   CHECK(model.requested().ultrasonic_enabled);
-  CHECK(model.observed() == actual);
-  CHECK(!model.observe(actual));
+  CHECK(model.requested() == actual);
+  CHECK(!model.receive_status(actual));
 }
 
 static void zero_brightness_preserves_levels_and_selection() {
@@ -122,21 +117,20 @@ static void inactive_brightness_intent_survives_readback_until_the_next_on() {
   for (auto section : {Section::FRONT, Section::BACK}) {
     LampStateModel model;
     const auto baseline = initial_state();
-    model.observe(baseline);
+    model.receive_status(baseline);
     auto requested = baseline;
     requested.set_light(section, false, baseline.brightness(section));
     model.request(requested);
     auto actual = requested;
     actual.set_brightness(section, 1);  // Last transmitted fade sample.
-    CHECK(!model.observe(actual));
-    CHECK(model.observed() == actual);
+    CHECK(!model.receive_status(actual));
     CHECK(model.requested() == requested);
 
     requested.set_light(section, true, requested.brightness(section));
     model.request(requested);
     actual = requested;
     actual.set_brightness(section, 10);  // A selected section must reconcile.
-    CHECK(model.observe(actual));
+    CHECK(model.receive_status(actual));
     CHECK(model.requested() == actual);
 
     actual.set_light(section, false, 25);
@@ -144,7 +138,7 @@ static void inactive_brightness_intent_survives_readback_until_the_next_on() {
     CHECK(model.requested() == actual);
     model.invalidate();
     actual.set_brightness(section, 30);
-    CHECK(model.observe(actual));  // Recovery establishes a fresh baseline.
+    CHECK(model.receive_status(actual));  // Recovery establishes a fresh baseline.
     CHECK(model.requested() == actual);
   }
 }
@@ -193,32 +187,29 @@ static void brightness_changes_preserve_the_other_section() {
 static void recovery_retains_requests_but_requires_a_new_baseline() {
   LampStateModel model;
   const auto confirmed = initial_state();
-  model.observe(confirmed);
+  model.receive_status(confirmed);
   auto local = confirmed;
   local.power = false;
   model.request(local);
 
   model.invalidate();
   CHECK(!model.initialized());
-  CHECK(!model.observed());
   CHECK(model.requested() == local);
   model.request(local);
   CHECK(!model.initialized());
-  CHECK(model.observe(confirmed));
+  CHECK(model.receive_status(confirmed));
   CHECK(model.initialized());
   CHECK(model.requested() == confirmed);
-  CHECK(model.observed() == confirmed);
 
   model.restore(local);
   CHECK(!model.initialized());
-  CHECK(!model.observed());
   CHECK(model.requested() == local);
 }
 
 int main() {
   restored_settings_require_received_state();
-  requests_do_not_mutate_confirmed_settings();
-  first_confirmation_records_unchanged_settings();
+  controller_snapshots_replace_local_requests();
+  matching_status_only_republishes_when_establishing_a_baseline();
   lamp_readback_reconciles_a_failed_request();
   zero_brightness_preserves_levels_and_selection();
   inactive_brightness_intent_survives_readback_until_the_next_on();

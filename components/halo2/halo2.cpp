@@ -241,14 +241,14 @@ void Halo2::request_state_(const LampState &requested) {
   save_mode_();
 }
 
-bool Halo2::send_state_(Command command, bool auto_brightness) {
+protocol::AirFrame Halo2::make_frame_(Command command, bool auto_brightness) {
   const auto &requested = lamp_state_.requested();
   ESP_LOGD(TAG, "TX command 0x%02X, power %s, mode %u/%u, front %u%%, back %u%%, %u K", command, ONOFF(requested.power),
            requested.selected(Section::FRONT), requested.selected(Section::BACK), requested.front_brightness,
            requested.back_brightness, requested.color_temperature);
   const auto payload = protocol::make_payload(command, requested, auto_brightness);
   last_pcf_ = protocol::request_pcf(app_pid_++);
-  return radio_.send(protocol::make_air_frame(last_pcf_, payload, radio_.address()));
+  return protocol::make_air_frame(last_pcf_, payload, radio_.address());
 }
 
 void Halo2::start_auto_brightness() {
@@ -288,7 +288,7 @@ void Halo2::save_mode_() {
 
 bool Halo2::apply_received_(const protocol::ReceivedPacket &received) {
   const auto &state = received.state;
-  const bool changed = received.is_reply() ? lamp_state_.observe(state) : lamp_state_.receive_request(state);
+  const bool changed = received.is_reply() ? lamp_state_.receive_status(state) : lamp_state_.receive_request(state);
   lifecycle_.on_received_state();
   // Persist received settings even when they match an optimistic local change.
   // ESPHome skips flash writes when the stored preference is unchanged.
@@ -324,12 +324,11 @@ void Halo2::send_commands_() {
   const auto batch = commands_.take(lamp_state_.requested(), millis());
   if (!batch) return;
   status_poll_.cancel();
-  for (auto command : *batch) {
-    if (!send_state_(command, batch->auto_brightness && command == Command::SETTINGS)) {
-      recover_radio_();
-      return;
-    }
-  }
+  std::array<protocol::AirFrame, 2> frames;
+  std::transform(batch->begin(), batch->end(), frames.begin(), [this, &batch](Command command) {
+    return make_frame_(command, batch->auto_brightness && command == Command::SETTINGS);
+  });
+  if (!radio_.send_batch(std::span(frames).first(batch->count))) recover_radio_();
 }
 
 void Halo2::receive_packet_() {
@@ -377,7 +376,8 @@ void Halo2::poll_status_() {
   }
   if (!status_poll_.due(now) || lights_transitioning_() || !radio_.idle()) return;
   ESP_LOGD(TAG, "%s lamp status", status_poll_.reading() ? "Reading" : "Refreshing");
-  if (send_state_(Command::STATUS)) {
+  const std::array<protocol::AirFrame, 1> frames{make_frame_(Command::STATUS)};
+  if (radio_.send_batch(frames)) {
     status_poll_.begin_request(last_pcf_ & protocol::PCF_PID_MASK);
   } else {
     recover_radio_();

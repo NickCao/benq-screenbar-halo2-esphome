@@ -71,7 +71,7 @@ class Halo2 : public PollingComponent {
   void start_radio_();
   void radio_ready_();
   void recover_radio_();
-  bool send_state_(Command command, bool auto_brightness = false);
+  halo2_protocol::AirFrame make_frame_(Command command, bool auto_brightness = false);
 
   struct SavedLink {
     halo2_protocol::Address address{};
@@ -143,6 +143,7 @@ class Halo2Light : public light::LightOutput, public Parented<Halo2> {
   void restore_into(LampState &state) const;
   void read_into(LampState &state) const;
   void publish(const LampState &state);
+  bool needs_temperature_sync(uint16_t temperature) const;
   void sync_temperature(uint16_t temperature);
   bool transitioning() const;
 

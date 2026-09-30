@@ -136,7 +136,7 @@ Selection is a two-bit enumeration, not two independent on/off bits. There is no
 Known command interactions:
 
 - `03` alone does not turn on a powered-off lamp. The bridge sends `03`, then `02` with power set, to apply settings and turn it on.
-- `03` applies brightness only to selected sections, including while global power is off. A check that deselected the back section with 80%, then sent 40% while it remained deselected, left its stored brightness at the previous 62%. After an OFF fade, that stored level can instead reflect the last transmitted fade sample. The bridge retains the requested brightness of unselected sections for their next ON and records the raw lamp readback separately.
+- `03` applies brightness only to selected sections, including while global power is off. A check that deselected the back section with 80%, then sent 40% while it remained deselected, left its stored brightness at the previous 62%. After an OFF fade, that stored level can instead reflect the last transmitted fade sample. The bridge retains the requested brightness of unselected sections for their next ON; debug logs show the raw lamp readback.
 - `02` with power clear turns the lamp off. A hardware check also showed that this command did **not** apply a simultaneous presence-disable bit or changed selection. Those settings need their own `03`.
 - `05` applies the timeout. All four durations have been written by the bridge and read back from the lamp, including a timeout change while power and presence detection were off.
 - Auto is an action in the bridge: set control bit 1 for a `03` request, then observe resulting brightness/temperature through polling. A durable Auto-enabled state is not decoded or exposed.

@@ -54,14 +54,17 @@ void Halo2Light::publish(const LampState &state) {
   call.perform();
 }
 
-void Halo2Light::sync_temperature(uint16_t temperature) {
+bool Halo2Light::needs_temperature_sync(uint16_t temperature) const {
   const float mireds = 1000000.0f / temperature;
-  if (state_->current_values.get_color_temperature() == mireds &&
-      state_->remote_values.get_color_temperature() == mireds)
-    return;
+  return state_->current_values.get_color_temperature() != mireds ||
+         state_->remote_values.get_color_temperature() != mireds;
+}
+
+void Halo2Light::sync_temperature(uint16_t temperature) {
+  if (!needs_temperature_sync(temperature)) return;
   ScopedPublication guard(reflecting_state_);
   auto call = state_->make_call();
-  call.set_color_temperature(mireds);
+  call.set_color_temperature(1000000.0f / temperature);
   call.set_transition_length(0);
   call.perform();
 }
@@ -77,14 +80,20 @@ void Halo2::control_light(Halo2Light &source) {
   auto requested = lamp_state_.requested();
   source.read_into(requested);
   const auto temperature = requested.color_temperature;
+  Halo2Light *peer = nullptr;
   if (temperature != lamp_state_.requested().color_temperature) {
-    auto *peer = lights_[source.section_ == Section::FRONT ? 1 : 0];
-    peer->sync_temperature(temperature);
-    // Mirroring can finish a peer fade. Include its resulting values in the
-    // same request; the guarded callbacks cannot submit another command.
-    peer->read_into(requested);
+    peer = lights_[source.section_ == Section::FRONT ? 1 : 0];
+    if (peer->needs_temperature_sync(temperature)) {
+      // An immediate temperature call finishes a peer fade at its remote
+      // target. Include that target before publishing either entity.
+      const auto &target = peer->state_->remote_values;
+      requested.set_light(peer->section_, target.is_on(), brightness_percent(target.get_brightness()));
+    } else {
+      peer->read_into(requested);
+    }
   }
   request_state_(requested);
+  if (peer != nullptr) peer->sync_temperature(temperature);
   if (source.transitioning()) return;
   // Repair zero-brightness OFF immediately so a following plain ON uses the
   // retained level. Otherwise only canonicalize the source's temperature.
