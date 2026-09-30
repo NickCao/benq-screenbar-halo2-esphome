@@ -8,7 +8,12 @@ trap 'rm -rf -- "$test_dir"' EXIT
 for source_file in "$project_dir"/tests/*_test.cpp; do
   test_name="${source_file##*/}"
   test_name="${test_name%.cpp}"
+  extra_sources=()
+  if [[ "$test_name" == halo2_coordinator_test ]]; then
+    extra_sources=("$project_dir/components/halo2/halo2.cpp" "$project_dir/components/halo2/halo2_light.cpp")
+  fi
   "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -Werror -pedantic \
-    -I "$project_dir/components/halo2" "$source_file" -o "$test_dir/$test_name"
+    -I "$project_dir/tests/support" -I "$project_dir/components/halo2" \
+    "$source_file" "${extra_sources[@]}" -o "$test_dir/$test_name"
   "$test_dir/$test_name"
 done

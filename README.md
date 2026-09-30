@@ -115,7 +115,7 @@ Upload updates and view logs with:
 | [`packages/halo2-common.yaml`](packages/halo2-common.yaml) | Networking, native API, entities, and common defaults |
 | [`screenbar-halo2-lr1121.yaml`](screenbar-halo2-lr1121.yaml) | Waveshare board configuration and radio wiring |
 | [`scripts/esphome`](scripts/esphome) | Podman wrapper used locally and by CI |
-| [`scripts/test`](scripts/test), [`tests/`](tests/) | Native lamp, command queue, lifecycle, and polling tests |
+| [`scripts/test`](scripts/test), [`tests/`](tests/README.md) | Native model and coordinator regression tests |
 | [`tests/hardware/`](tests/hardware/) | Opt-in pytest checks against a deployed bridge and lamp |
 | [`secrets.example.yaml`](secrets.example.yaml) | Credential template |
 | [`home-assistant/dashboard.yaml`](home-assistant/dashboard.yaml) | Optional HA dashboard |
@@ -135,6 +135,8 @@ All C++ sources needed by `halo2` live in its component directory and are copied
 ```
 
 The native tests require a C++20 compiler; set `CXX` to its path if it is not available as `c++`. They have no ESPHome or hardware dependencies.
+
+The [coordinator tests](tests/README.md) compile the production component and LR1121 driver against simulated SPI/GPIO and a small ESPHome shim. They cover commands during polling, interrupted batches, discovery, recovery, and light callback ordering using a virtual clock.
 
 CI runs the native tests, then uses dummy credentials to compile the Waveshare profile. The wrapper defaults to four compiler processes; override `ESPHOME_DEFAULT_COMPILE_PROCESS_LIMIT` if needed. `ESPHOME_IMAGE` can select another image for compatibility checks.
 

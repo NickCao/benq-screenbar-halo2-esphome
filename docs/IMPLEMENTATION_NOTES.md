@@ -116,6 +116,8 @@ The [protocol reference](PROTOCOL.md#framing-and-packet-control-field) is the so
 
 ## Reliability and verification
 
+The [native coordinator suite](../tests/README.md) runs the production component, light adapters, protocol, and LR1121 driver together against a scripted chip and minimal ESPHome interfaces. It checks packet ordering, command/poll arbitration, interrupted batches, discovery and recovery, publication guards, and shared-temperature transition handling. Time and packet arrivals are controlled by the tests. It complements the isolated state-model tests; real framework interpolation and RF behavior remain covered by compilation and opt-in hardware checks.
+
 **Command sent** means the radio completed transmission and reported TX_DONE, not that a visible lamp change was confirmed. **Lamp status received** means a refresh/read polling cycle returned validated lamp state.
 
 The opt-in [pytest hardware suite](../tests/hardware/) sends native API commands and checks fresh lamp readback in DEBUG logs. It covers independent brightness, color-temperature conversion at both limits and an interior value, shared temperature during a peer fade, preserving a peer fade during temperature rounding, grouped on/off in both arrival orders, section selection, zero-brightness OFF followed by plain ON, combined power/presence/timeout changes, full resend while off, and all ultrasonic timeout options. It also checks HA entity values for retained brightness and shared temperature. These tests operate the lamp and require an explicit `--halo2-device`; ordinary test runs skip them.

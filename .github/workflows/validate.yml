@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - name: Test bridge state models
+      - name: Test bridge models and coordinator
         run: ./scripts/test
       - uses: actions/cache@v4
         with:
