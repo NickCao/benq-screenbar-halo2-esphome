@@ -357,11 +357,15 @@ void Halo2::receive_packet_() {
   protocol::ReceivedPacket received;
   const uint32_t previous_rx_count = radio_.rx_count();
   const bool received_state = radio_.poll(received);
-  if (status_poll_.waiting_reply() && radio_.rx_count() != previous_rx_count) {
+  if (radio_.rx_count() != previous_rx_count) {
     const auto &frame = radio_.rx_frame();
-    ESP_LOGV(TAG, "Status RX: %s, decoded %s, PCF %02X/%02X, command %02X",
-             format_hex_pretty(frame.data(), frame.size()).c_str(), YESNO(received_state), received.pcf, last_pcf_,
-             received.command);
+    // Read header bytes directly so rejected packets still show their actual
+    // command and control bits. State validation must not filter diagnostics.
+    const uint8_t pcf = static_cast<uint8_t>((frame[0] << 1U) | (frame[1] >> 7U));
+    const uint8_t command = static_cast<uint8_t>((frame[1] << 1U) | (frame[2] >> 7U));
+    const uint8_t control = static_cast<uint8_t>((frame[2] << 1U) | (frame[3] >> 7U));
+    ESP_LOGD(TAG, "RX air frame: %s, PCF %02X, command %02X, control %02X, decoded %s",
+             format_hex_pretty(frame.data(), frame.size()).c_str(), pcf, command, control, YESNO(received_state));
   }
   if (!received_state) {
     if (const char *error = radio_.last_error()) {
