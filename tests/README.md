@@ -14,6 +14,15 @@ halo2_light.cpp, including the real LR1121Radio and protocol codec. It drives
 setup(), loop(), update(), and entity commands without accessing the
 coordinator's protected state.
 
+## Protocol coverage
+
+- All four original-controller Favorite save/recall captures decode into their
+  expected settings, command codes, and request PCFs, and support address discovery.
+- Favorite frames retain CRC, address, framing, and payload validation. Replies
+  are accepted only when explicitly enabled.
+- Legacy `0x00..0x05` commands remain accepted; unknown `0x06` and later unsupported
+  commands remain rejected.
+
 ## Coordinator coverage
 
 - Boot requires a fresh baseline; reflecting received state creates no commands.
@@ -30,6 +39,10 @@ coordinator's protected state.
 - Missing replies retain entity state, raise a warning after three failed cycles,
   and clear the failure count after a successful read.
 - Controller requests update entities without echoing a radio command.
+- Captured Favorite requests publish settings without echo, then reconcile
+  brightness, temperature, and presence through fresh lamp polling.
+- Matching Favorite replies can acknowledge refresh and trigger read retries;
+  only a fresh status reply publishes lamp state.
 - Wrong-PID replies and queued non-status replies cannot publish lamp state.
 - Polling waits for transitions, including the interval before the first sample.
 - Temperature rounding preserves a peer fade; a changed shared temperature

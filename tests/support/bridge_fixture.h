@@ -23,7 +23,7 @@ class BridgeFixture {
  public:
   static constexpr protocol::Address ADDRESS{0x12, 0x34, 0x56, 0x78};
 
-  explicit BridgeFixture(bool discover = false) {
+  explicit BridgeFixture(bool discover = false, const protocol::Address &link = ADDRESS) {
     time_us = 0;
     esphome::test_preferences.values.clear();
     reset.write = [this](bool high) {
@@ -39,7 +39,7 @@ class BridgeFixture {
     bridge.set_radio_status(&status);
     bridge.set_radio_address_sensor(&address);
     bridge.set_auto_discover(discover);
-    if (!discover) bridge.set_radio_address(ADDRESS);
+    if (!discover) bridge.set_radio_address(link);
     front.setup();
     back.setup();
     bridge.setup();
@@ -74,11 +74,13 @@ class BridgeFixture {
     CHECK(tx.packet().command == command);
     return tx;
   }
-  void reply(const LampState &state, uint8_t command = Command::STATUS, uint8_t pid_xor = 0) {
+  void reply(const LampState &state, uint8_t command = Command::STATUS, uint8_t pid_xor = 0, bool favorite = false) {
     const auto &tx = chip.transmissions.back();
     const uint8_t pcf = tx.packet().pcf ^ pid_xor;
+    auto payload = protocol::make_payload(command, state);
+    payload.control.favorite = favorite;
     chip.finish_tx();
-    chip.receive(protocol::make_air_frame(pcf | protocol::PCF_NO_ACK, protocol::make_payload(command, state), tx.address));
+    chip.receive(protocol::make_air_frame(pcf | protocol::PCF_NO_ACK, payload, tx.address));
   }
   void finish_command() {
     chip.finish_tx();
@@ -86,10 +88,13 @@ class BridgeFixture {
     CHECK(status.state == "Command sent");
   }
   void receive(const LampState &state, bool reply = false) {
+    const uint8_t pcf = protocol::request_pcf(0) | (reply ? protocol::PCF_NO_ACK : 0);
+    receive(protocol::make_air_frame(pcf, protocol::make_payload(Command::STATUS, state), chip.address));
+  }
+  void receive(const protocol::AirFrame &frame) {
     wait_until([&]() { return chip.receiving && chip.rx_length == protocol::AIR_FRAME_SIZE; });
     const uint32_t count = bridge.get_radio().rx_count();
-    const uint8_t pcf = protocol::request_pcf(0) | (reply ? protocol::PCF_NO_ACK : 0);
-    chip.receive(protocol::make_air_frame(pcf, protocol::make_payload(Command::STATUS, state), chip.address));
+    chip.receive(frame);
     wait_until([&]() { return bridge.get_radio().rx_count() > count; });
   }
   void discover(const protocol::Address &link, const LampState &state) {

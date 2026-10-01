@@ -20,7 +20,6 @@ constexpr std::array<uint8_t, 3> RADIO_CHANNELS{5, 46, 75};
 constexpr uint8_t RADIO_CHANNEL = RADIO_CHANNELS[0];
 constexpr unsigned RADIO_BASE_FREQUENCY_MHZ = 2400;
 
-constexpr uint8_t MAX_COMMAND_CODE = Command::ULTRASONIC_TIMEOUT;
 constexpr uint8_t PCF_NO_ACK = 0x01, PCF_PID_MASK = 0x06, PCF_PID_SHIFT = 1, PCF_LENGTH_SHIFT = 3;
 constexpr uint8_t PACKET_SUFFIX = 0x02;
 constexpr uint16_t CRC_INITIAL = 0xFFFF, CRC_POLYNOMIAL = 0x1021, CRC_TOP_BIT = 0x8000;
@@ -130,8 +129,10 @@ inline bool decode_frame(const uint8_t *raw, size_t length, ReceivedPacket &pack
   if (payload.ultrasonic_timeout > UltrasonicTimeout::MINUTES_15 || payload.suffix != PACKET_SUFFIX) return false;
   // Bit 0 is No-ACK: lamp replies set it. Discovery accepts requests only;
   // normal reception may decode replies for a matching status query.
+  // Favorite snapshots use the same payload; 0x06 remains unsupported.
   if ((frame.pcf >> PCF_LENGTH_SHIFT) != PAYLOAD_SIZE || (!allow_reply && (frame.pcf & PCF_NO_ACK)) ||
-      payload.command > MAX_COMMAND_CODE)
+      (payload.command > Command::ULTRASONIC_TIMEOUT && payload.command != Command::FAVORITE_RECALL &&
+       payload.command != Command::FAVORITE_SAVE))
     return false;
   if (halo_crc(frame.pcf, payload, address) != esphome::convert_big_endian(frame.crc_be)) return false;
   const auto selection = static_cast<LampSelection>(payload.control.mode);

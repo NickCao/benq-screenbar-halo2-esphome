@@ -69,7 +69,7 @@ There is no additional LR1121 length byte, address-filter byte, whitening sequen
 
 ## Application payload
 
-All currently supported requests carry a full ten-byte snapshot, including status requests. The observed favorite `07`/`08` requests use the same format. A field's presence does not mean every command applies it.
+All supported requests carry a full ten-byte snapshot, including status and favorite `07`/`08` requests. A field's presence does not mean every command applies it.
 
 | Payload offset | Frame offset | Size | Meaning |
 |---|---|---|---|
@@ -131,8 +131,8 @@ Selection is a two-bit enumeration, not two independent on/off bits. There is no
 | `03` | Confirmed selection, brightness, temperature, and presence-enable settings; bit 1 triggers Auto adjustment | Transmitted for these settings |
 | `04` | Confirmed lamp-status request/reply | Transmitted by polling |
 | `05` | Confirmed timeout update; also seen when the controller becomes idle, consistent with upstream's sleep label | Transmitted to save the timeout |
-| `07` | Favorite recall on the controller; conflicting-payload probes confirm that it applies the supplied brightness with both sections selected and powered on | Rejected by the current ordinary-state decoder; never transmitted by normal firmware |
-| `08` | Sent when the controller saves Favorite by a long press; carries the current settings, but its lamp-side storage effect remains unverified | Rejected by the current ordinary-state decoder; never transmitted by normal firmware |
+| `07` | Favorite recall on the controller; conflicting-payload probes confirm that it applies the supplied brightness with both sections selected and powered on | Decoded as a controller snapshot; never transmitted by normal firmware |
+| `08` | Sent when the controller saves Favorite by a long press; carries the current settings, but its lamp-side storage effect remains unverified | Decoded as a controller snapshot; never transmitted by normal firmware |
 | `0A` | Pairing, reported upstream | Rejected by the current ordinary-state decoder; never transmitted |
 | `0B` | One CRC-valid capture during presence-button interaction; associated with the enable bit clearing, exact command semantics unknown | Rejected by the current decoder; never transmitted |
 | Others | Unknown | Rejected |
@@ -203,7 +203,9 @@ Cleanup replayed `08` for the last controller-captured 48% favorite, restored th
 
 The agreed integration scope is to decode incoming controller `07`/`08` snapshots so the bridge follows controller actions, then reconcile actual lamp state through fresh `04` replies. This does not require the bridge to store a favorite, expose save/recall actions, or transmit favorite commands. Knowing whether the lamp keeps another preset copy is unnecessary for following those messages. This is bridge policy, not a statement that the lamp has no preset storage.
 
-The current decoder still accepts only `00..05` and rejects both favorite commands. Adding explicit acceptance of `07` and `08` is the next implementation step; `06` remains unknown and must not become accepted merely by extending the numeric range. Favorite bit `04` need not become persistent bridge state for controller synchronization. The command payload is a controller snapshot; it does not establish that every supplied field became the lamp's current state, which remains subject to the existing status-poll rules.
+The decoder accepts `00..05` plus explicit `07`/`08` entries; unknown `06` remains rejected. Favorite requests retain their original command codes and use the ordinary controller-snapshot path: publish the supplied settings without echoing a command, then schedule a fresh lamp poll. Favorite bit `04` is not retained in bridge state. The snapshot does not establish that every supplied field became the lamp's current state; fresh `04` replies reconcile it.
+
+Decoded favorite replies follow the existing status-poll rules. A matching reply can acknowledge the refresh query, but a queued `07`/`08` reply to the read query cannot publish lamp state and instead triggers a delayed retry while attempts remain. Only a matching `04` reply after refresh is accepted as fresh lamp state.
 
 ### Ultrasonic timeout
 
@@ -300,13 +302,13 @@ The current decoder requires:
 
 - Exactly 14 air-buffer bytes, a zero leading PCF bit, and a ten-byte advertised payload.
 - A valid software CRC for the selected or candidate address.
-- Command in `00..05`, timeout in `00..03`, and suffix `02`.
+- Command in `00..05`, `07`, or `08`, timeout in `00..03`, and suffix `02`.
 - Selection `0..2`, both brightness values in `1..100`, and the front temperature in `2700..6500` K.
 - No-ACK clear for discovery; ordinary decoding also allows replies, which the component accepts only through its polling rules.
 
-The decoder does **not** require a 25 K receive step, equal temperature fields, a valid rear temperature, zero favorite/unknown control bits, or zero trailing packing bits. It does not retain the rear temperature or favorite/Auto status. CRC-valid controller requests accepted by this filter, including `00`, `01`, and `05`, are currently treated as state snapshots; their exact freshness semantics remain incomplete.
+The decoder does **not** require a 25 K receive step, equal temperature fields, a valid rear temperature, zero favorite/unknown control bits, or zero trailing packing bits. It does not retain the rear temperature or favorite/Auto status. CRC-valid controller requests accepted by this filter, including `00`, `01`, `05`, `07`, and `08`, are treated as state snapshots and reconciled through fresh polling; their exact field write masks and snapshot freshness remain incompletely characterized.
 
-Rejected does not mean invalid BenQ traffic. The observed favorite `07`/`08` requests and `0B` packet are examples of valid-CRC frames outside the decoder's supported command range. Pairing and other payload lengths may require different validation rules.
+Rejected does not mean invalid BenQ traffic. The observed `0B` packet is a valid-CRC frame outside the decoder's supported command set. Pairing and other payload lengths may require different validation rules.
 
 ## Open questions
 

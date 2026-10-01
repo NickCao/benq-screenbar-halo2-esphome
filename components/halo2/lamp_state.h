@@ -9,8 +9,15 @@ namespace esphome::halo2 {
 enum class Section : uint8_t { FRONT, BACK };
 enum class LampSelection : uint8_t { FRONT_ONLY = 0, BACK_ONLY = 1, BOTH = 2 };
 enum class UltrasonicTimeout : uint8_t { MINUTES_3 = 0, MINUTES_5 = 1, MINUTES_10 = 2, MINUTES_15 = 3 };
-// Application operations supported by the lamp, using their wire values.
-enum Command : uint8_t { POWER = 0x02, SETTINGS = 0x03, STATUS = 0x04, ULTRASONIC_TIMEOUT = 0x05 };
+// Application commands using their wire values. Favorite commands are receive-only.
+enum Command : uint8_t {
+  POWER = 0x02,
+  SETTINGS = 0x03,
+  STATUS = 0x04,
+  ULTRASONIC_TIMEOUT = 0x05,
+  FAVORITE_RECALL = 0x07,
+  FAVORITE_SAVE = 0x08,
+};
 constexpr std::array<uint8_t, 4> ULTRASONIC_TIMEOUT_MINUTES{3, 5, 10, 15};
 constexpr uint8_t MIN_BRIGHTNESS_PERCENT = 1, MAX_BRIGHTNESS_PERCENT = 100;
 constexpr uint16_t MIN_TEMPERATURE_K = 2700, MAX_TEMPERATURE_K = 6500, TEMPERATURE_STEP_K = 25;

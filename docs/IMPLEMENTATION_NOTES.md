@@ -27,6 +27,8 @@ Brightness readback reconciles selected sections. Unselected sections ignore bri
 
 Packet command, PCF, and request/reply direction belong to `ReceivedPacket`, alongside its decoded `LampState`. Decoder success is reported by its return value; initialization belongs to the state model. Packet metadata cannot become part of requested lamp settings.
 
+Original-controller Favorite recall (`0x07`) and save (`0x08`) requests use the same snapshot path as other controller requests: publish settings without echoing a command, then schedule fresh lamp polling to reconcile the actual state. Their command codes remain packet metadata, and the Favorite flag is not retained. The bridge has no favorite storage or save/recall actions and does not transmit these commands. Favorite replies can acknowledge a matching refresh query, but only a fresh matching `0x04` reply can publish lamp state.
+
 | Front light | Back light | Radio state |
 |---|---|---|
 | On | On | Power on, both selected |

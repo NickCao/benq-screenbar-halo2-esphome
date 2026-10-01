@@ -1,5 +1,6 @@
 #include <iostream>
 #include "bridge_fixture.h"
+#include "favorite_captures.h"
 
 using namespace esphome::halo2;
 using namespace halo2_test;
@@ -244,6 +245,56 @@ static void controller_updates_publish_without_echo_and_request_a_fresh_poll() {
   f.expect_lights(controller);
 }
 
+static void captured_favorite_updates_publish_without_echo_and_reconcile_from_the_lamp() {
+  BridgeFixture f(false, FAVORITE_ADDRESS);
+  f.establish_baseline(baseline());
+  for (const auto &capture : FAVORITE_CAPTURES) {
+    const size_t count = f.chip.transmissions.size();
+    const auto controller = favorite_state(capture);
+    f.receive(capture.frame);
+    f.expect_lights(controller);
+    CHECK(f.status.state == "Controller update received");
+    CHECK(f.ultrasonic.state == 2);
+    f.advance(100);
+    CHECK(f.chip.transmissions.size() == count);
+
+    // A controller snapshot does not prove the lamp applied every field.
+    // Fresh status must reconcile it without echoing settings back.
+    auto actual = controller;
+    actual.color_temperature = 4500;
+    actual.ultrasonic_enabled = false;
+    f.readback(actual);
+    f.expect_lights(actual);
+    CHECK(f.ultrasonic.state == 0);
+    f.advance(200);
+    CHECK(f.chip.transmissions.size() == count + 2);
+    CHECK(f.status_count("Command sent") == 0);
+  }
+}
+
+static void favorite_replies_can_refresh_but_cannot_publish_until_a_status_reply(uint8_t command) {
+  BridgeFixture f;
+  f.establish_baseline(baseline());
+  const auto stale = baseline(false);
+  f.bridge.update();
+  f.next_tx(Command::STATUS);
+  f.reply(stale, command, 0, true);
+  f.next_tx(Command::STATUS);
+  f.expect_lights(baseline());  // A favorite ACK can refresh, never publish.
+
+  f.reply(stale, command, 0, true);
+  const uint32_t received_at = esphome::millis();
+  const auto retry = f.next_tx(Command::STATUS);
+  CHECK(retry.at - received_at >= StatusPoll::SETTLE_MS);
+  f.expect_lights(baseline());
+
+  const uint32_t rx_count = f.bridge.get_radio().rx_count();
+  f.reply(stale);
+  f.wait_until([&]() { return f.bridge.get_radio().rx_count() > rx_count; });
+  f.expect_lights(stale);
+  CHECK(f.status.state == "Lamp status received");
+}
+
 static void wrong_pid_and_stale_command_replies_cannot_publish_state() {
   BridgeFixture f;
   f.establish_baseline(baseline());
@@ -369,6 +420,9 @@ int main() {
   run("discovery recovery and dwell timer", discovery_recovery_restarts_the_scan_and_cancels_the_old_dwell);
   run("poll failures and recovery", missed_polls_retain_state_and_a_fresh_reply_clears_the_warning);
   run("controller update without echo", controller_updates_publish_without_echo_and_request_a_fresh_poll);
+  run("captured favorite controller updates", captured_favorite_updates_publish_without_echo_and_reconcile_from_the_lamp);
+  run("favorite recall reply freshness", []() { favorite_replies_can_refresh_but_cannot_publish_until_a_status_reply(0x07); });
+  run("favorite save reply freshness", []() { favorite_replies_can_refresh_but_cannot_publish_until_a_status_reply(0x08); });
   run("reply PID and freshness filtering", wrong_pid_and_stale_command_replies_cannot_publish_state);
   run("rounding during peer transition", temperature_rounding_leaves_a_peer_transition_running);
   run("temperature change during peer OFF fade",
