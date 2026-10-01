@@ -19,6 +19,8 @@ The bridge follows the [ESPHome external-component layout](https://esphome.io/co
 
 The [protocol reference](PROTOCOL.md) documents the wire format, capture evidence, confirmed command effects, decoder limits, and open questions. This document describes how the bridge uses that protocol.
 
+The [independent protocol probes](PROTOCOL_EXPERIMENTS.md) additionally establish `0x06` as an Auto action and `0x0B` as a presence-enable command on the tested pair. Production decoding still supports `0x00..0x05`, `0x07`, and `0x08`; the experiment did not extend the runtime command set or relax validation for other lamp-accepted values.
+
 ## HA state and radio commands
 
 `LampState` contains global power, a front/back selection enum, two brightness values, shared temperature, presence-mode enable, and inactivity timeout. `LampStateModel` keeps requested settings for outgoing commands and the optimistic UI, together with a flag indicating whether a received baseline has been established. HA commands update requested settings; controller snapshots and accepted fresh lamp status replies reconcile them. Matching replies do not republish initialized settings.

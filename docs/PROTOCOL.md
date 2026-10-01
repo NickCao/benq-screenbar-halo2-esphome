@@ -15,6 +15,8 @@ The implementation is in [`halo2_protocol.h`](../components/halo2/halo2_protocol
 
 A valid CRC establishes a coherent frame for the learned address; it does not establish which fields a command applies. Controller actions, lamp readback, and physical observations are identified separately below.
 
+The [independent command probes](PROTOCOL_EXPERIMENTS.md) cover 120 command cases and 12 timing sequences without controller input. Their [captured frame evidence](captures/protocol-probes-2026-09-30.json) includes actual requests and repeated fresh lamp replies. Those results establish reported setting changes; they do not establish physical output or internal preset storage.
+
 Earlier research comes from [kuzmin-no's integration](https://github.com/kuzmin-no/BenQ_ScreenBar_HALO_2_HA_integration#technical-details). Its wake/sleep and pairing labels are useful leads, but its fixed payload ending `01 02` is incomplete: the penultimate byte is the configurable inactivity timeout. The [BenQ product information](https://www.benq.com/en-sg/campaign/elevate-with-halo.html) independently lists the four available durations. Neither source documents the complete command behavior below.
 
 All byte values in hex examples are hexadecimal. Bit 0 is the least significant bit. Payload offsets start at the command byte; canonical-frame offsets additionally include the one-byte PCF representation.
@@ -79,12 +81,12 @@ All supported requests carry a full ten-byte snapshot, including status and favo
 | 3–4 | 4–5 | 2 | Front/logical shared color temperature in kelvin, big-endian |
 | 5 | 6 | 1 | Back brightness, integer percent `1..100` |
 | 6–7 | 7–8 | 2 | Back color-temperature field, big-endian |
-| 8 | 9 | 1 | Ultrasonic inactivity timeout index `0..3` |
-| 9 | 10 | 1 | Observed constant `02`; its purpose is unknown |
+| 8 | 9 | 1 | Ultrasonic inactivity timeout index; durations mapped for `0..3`, `04` was also retained after a probe but its duration is unknown |
+| 9 | 10 | 1 | Controller/status value `02`; manual `03` also accepted suffixes `00`, `01`, and `03`, with purpose still unknown |
 
 Brightness fields retain nonzero values while power is off. The bridge never uses zero brightness as a wire-level OFF command. It represents temperature as one shared setting, writes both fields identically, and rounds outgoing values to 25 K steps within 2700–6500 K (`0A 8C`–`19 64`).
 
-During Auto adjustment, the rear temperature field has been observed to lag the front field. The bridge takes the front field as authoritative. The unequal-temperature experiment below found that command `03` retained both fields in replies while visible color followed the first field, including with only the rear section selected.
+During Auto adjustment, the temperature fields can differ. In the independent probes, the first field changed to 4000 K while the rear field retained the manual 4200 K value, including after passive listening. The bridge takes the front field as authoritative. The unequal-temperature experiment below found that command `03` retained both fields in replies while visible color followed the first field, including with only the rear section selected. The cause and purpose of unequal fields remain unknown.
 
 ### Unequal-temperature experiment, 2026-09-29
 
@@ -113,11 +115,11 @@ The observed output supports treating the first field as shared temperature for 
 | Bits | Mask | Meaning and evidence |
 |---|---|---|
 | 0 | `01` | Global power, confirmed |
-| 1 | `02` | Auto brightness request when used with command `03`, confirmed; persistent mode/status semantics unknown |
-| 2 | `04` | Favorite flag, observed on `07`/`08` requests and subsequent `04` replies; manual `03` clears it in the tested cases. Necessity and complete status semantics remain unknown |
-| 4–3 | `18` | Two-bit lamp selection: `0` front only, `1` back only, `2` both; `3` unknown |
+| 1 | `02` | Auto request under `03`, retained in later replies until cleared by a manual request; `06` also triggers Auto with this bit clear. It does not reliably indicate active adjustment or completion |
+| 2 | `04` | Favorite flag, set/cleared in replies by manual `03` as well as Favorite requests. Not required for tested `07`/`08` setting changes; other internal/status semantics remain unknown |
+| 4–3 | `18` | Two-bit selection: `0` front only, `1` back only, `2` both. `3` was retained under `03`/`07`/`08`, with neither brightness field updated; visible behavior remains unverified |
 | 5 | `20` | Ultrasonic presence detection enabled, confirmed; this is not an occupancy reading |
-| 6–7 | `C0` | Unknown |
+| 6–7 | `C0` | Retained in replies when supplied under manual `03`; functional meaning unknown |
 
 Selection is a two-bit enumeration, not two independent on/off bits. There is no confirmed “neither selected” value: turning everything off clears global power while retaining a valid selection. The bridge ignores control bits 2, 6, and 7 on reception and clears them in outgoing packets. It does not preserve unknown/favorite bits.
 
@@ -131,10 +133,11 @@ Selection is a two-bit enumeration, not two independent on/off bits. There is no
 | `03` | Confirmed selection, brightness, temperature, and presence-enable settings; bit 1 triggers Auto adjustment | Transmitted for these settings |
 | `04` | Confirmed lamp-status request/reply | Transmitted by polling |
 | `05` | Confirmed timeout update; also seen when the controller becomes idle, consistent with upstream's sleep label | Transmitted to save the timeout |
-| `07` | Favorite recall on the controller; conflicting-payload probes confirm that it applies the supplied brightness with both sections selected and powered on | Decoded as a controller snapshot; never transmitted by normal firmware |
-| `08` | Sent when the controller saves Favorite by a long press; carries the current settings, but its lamp-side storage effect remains unverified | Decoded as a controller snapshot; never transmitted by normal firmware |
+| `06` | Confirmed Auto brightness/first-temperature adjustment in controlled probes; does not apply conflicting snapshot settings | Rejected by the current decoder; never transmitted by normal firmware |
+| `07` | Controller Favorite recall; applies selection, selected brightness, temperature fields, and presence in tested ON/OFF states, preserving power and timeout; Favorite bit is not required for these changes | Decoded as a controller snapshot; never transmitted by normal firmware |
+| `08` | Controller Favorite save by long press; also applies the same tested live settings as `07`; internal preset storage remains unverified | Decoded as a controller snapshot; never transmitted by normal firmware |
 | `0A` | Pairing, reported upstream | Rejected by the current ordinary-state decoder; never transmitted |
-| `0B` | One CRC-valid capture during presence-button interaction; associated with the enable bit clearing, exact command semantics unknown | Rejected by the current decoder; never transmitted |
+| `0B` | Confirmed presence-enable update; other tested snapshot fields remained unchanged | Rejected by the current decoder; never transmitted |
 | Others | Unknown | Rejected |
 
 Known command interactions:
@@ -145,7 +148,17 @@ Known command interactions:
 - `05` applies the timeout. All four durations have been written by the bridge and read back from the lamp, including a timeout change while power and presence detection were off.
 - Auto is an action in the bridge: set control bit 1 for a `03` request, then observe resulting brightness/temperature through polling. A durable Auto-enabled state is not decoded or exposed.
 
-These observations do not establish the complete write mask of every command. In particular, whether `03` also applies the timeout, or `05` applies additional settings, has not been isolated. The bridge sends complete snapshots and uses the verified command for each requested effect.
+The [independent field matrix](PROTOCOL_EXPERIMENTS.md#fields-applied-by-commands) narrows which snapshot fields each command changes:
+
+| Command | Applied fields in the probes | Fields left unchanged |
+|---|---|---|
+| `02` | Global power | Selection, brightness, temperature fields, presence, timeout |
+| `03`, `07`, `08` | Selection, selected-section brightness, temperature fields, presence | Global power, timeout |
+| `04` | Status query | All supplied snapshot settings |
+| `05` | Timeout | Global power, selection, brightness, temperature fields, presence |
+| `0B` | Presence enable | Global power, selection, brightness, temperature fields, timeout |
+
+These are reported-state observations under the documented conditions, not a complete specification of every side effect. In particular, some `05` requests following other commands were acknowledged but did not apply their timeout; a retry after readback did. [Sequencing details](PROTOCOL_EXPERIMENTS.md#timeout-sequencing-exception) do not establish a universal delay threshold. The bridge sends complete snapshots and uses the verified command for each requested effect.
 
 ### Favorite save/recall experiment, 2026-09-30
 
@@ -169,7 +182,7 @@ Captured canonical frames, including PCF and independently verified CRC (timesta
 
 All four are requests (No-ACK clear). Their control byte is `35`, which adds Favorite bit `04` to the ordinary manual-settings value `31`. Following each save or recall, controller `04` requests retain `35`; the next manual `03` request clears the bit to `31`. No lamp replies were captured in this experiment, so this does not establish an active-favorite indicator in lamp replies.
 
-Recall requests contain the previously saved settings, even after manual settings have changed. These controller captures establish the command mapping and payload contents on this pair. The follow-up below tests which brightness values `07` applies. Preset storage, necessity of Favorite bit `04`, other fields' write masks, and persistence across controller/lamp power loss still require separate experiments.
+Recall requests contain the previously saved settings, even after manual settings have changed. These controller captures establish the command mapping and payload contents on this pair. The follow-up below tests which brightness values `07` applies. This passive capture did not isolate preset storage, flag necessity, field write masks, or persistence; the later [independent probes](PROTOCOL_EXPERIMENTS.md#favorites-and-selection) tested flag necessity for live setting changes and additional fields.
 
 #### Conflicting recall payload experiment, 2026-09-30
 
@@ -193,9 +206,9 @@ Transmitted probe frames and representative accepted lamp replies, in canonical 
 | 01:14:12.622 | `07` with 65% | `52 07 35 41 0A 8C 41 0A 8C 01 02 75 4A` |
 | 01:14:17.488 | Fresh 65% status reply | `53 04 35 41 0A 8C 41 0A 8C 01 02 1C CC` |
 
-**Confirmed:** under these conditions, `07` applies its supplied brightness even when it differs from the preceding `08` save request. The resulting brightness follows the recall payload. Together with the controller captures, this establishes that the controller supplies the favorite brightness on recall. It does not prove exclusive controller-side storage, rule out a lamp-side copy, or isolate whether `08` stores anything in the lamp. Power, selection, temperature, presence, and timeout were held constant, so their write masks under `07`/`08` remain unverified.
+**Confirmed:** under these conditions, `07` applies its supplied brightness even when it differs from the preceding `08` save request. The resulting brightness follows the recall payload. Together with the controller captures, this establishes that the controller supplies the favorite brightness on recall. It does not prove exclusive controller-side storage, rule out a lamp-side copy, or isolate whether `08` stores anything in the lamp. Power, selection, temperature, presence, and timeout were held constant in this experiment; their effects were subsequently tested in the [independent field matrix](PROTOCOL_EXPERIMENTS.md#fields-applied-by-commands).
 
-Lamp `04` replies retained control `35` after `07`/`08`, including across bridge status requests whose Favorite bit was clear. Manual `03` settings changed replies back to `31`. This is an observed lamp status flag; its necessity for recall and behavior under other commands or power cycles remain unverified.
+Lamp `04` replies retained control `35` after `07`/`08`, including across bridge status requests whose Favorite bit was clear. Manual `03` settings with Favorite clear changed replies back to `31`. Later probes applied Favorite settings with the bit clear and also set it using manual `03`; its internal role and power-loss behavior remain unverified.
 
 Cleanup replayed `08` for the last controller-captured 48% favorite, restored the starting lamp state (both on at 9%, 2700 K, presence enabled, five-minute timeout), and restored normal firmware. Two fresh replies after restoration matched the initial state, and the temporary API action was absent.
 
@@ -203,7 +216,7 @@ Cleanup replayed `08` for the last controller-captured 48% favorite, restored th
 
 The agreed integration scope is to decode incoming controller `07`/`08` snapshots so the bridge follows controller actions, then reconcile actual lamp state through fresh `04` replies. This does not require the bridge to store a favorite, expose save/recall actions, or transmit favorite commands. Knowing whether the lamp keeps another preset copy is unnecessary for following those messages. This is bridge policy, not a statement that the lamp has no preset storage.
 
-The decoder accepts `00..05` plus explicit `07`/`08` entries; unknown `06` remains rejected. Favorite requests retain their original command codes and use the ordinary controller-snapshot path: publish the supplied settings without echoing a command, then schedule a fresh lamp poll. Favorite bit `04` is not retained in bridge state. The snapshot does not establish that every supplied field became the lamp's current state; fresh `04` replies reconcile it.
+The decoder accepts `00..05` plus explicit `07`/`08` entries. Confirmed commands `06` and `0B` remain unsupported by the production decoder; the independent probes did not add runtime support. Favorite requests retain their original command codes and use the ordinary controller-snapshot path: publish the supplied settings without echoing a command, then schedule a fresh lamp poll. Favorite bit `04` is not retained in bridge state. The snapshot does not establish that every supplied field became the lamp's current state; fresh `04` replies reconcile it.
 
 Decoded favorite replies follow the existing status-poll rules. A matching reply can acknowledge the refresh query, but a queued `07`/`08` reply to the read query cannot publish lamp state and instead triggers a delayed retry while attempts remain. Only a matching `04` reply after refresh is accepted as fresh lamp state.
 
@@ -219,6 +232,8 @@ Decoded favorite replies follow the existing status-poll rules. A matching reply
 **Wire value `00` means three minutes, not disabled.** Disabling the sensor clears control bit 5 using `03`, retaining the last timeout. HA combines these independent fields into one select: Disabled, 3 minutes, 5 minutes, 10 minutes, or 15 minutes. Choosing a duration enables presence detection and changes the timeout when needed.
 
 The inactivity timer runs in the lamp, not in ESPHome or HA. No occupancy measurement or remaining countdown has been identified in this payload.
+
+An independent `05` probe also stored timeout index `04` in fresh replies. Its actual inactivity duration was not measured; the bridge continues to support only the four mapped durations above.
 
 #### Capture evidence, 2026-09-28
 
@@ -280,6 +295,8 @@ Lamp state has been obtained through replies to requests; unsolicited updates af
 
 **Confirmed:** a matching ACK can contain state from before the triggering request, even after the lamp has already acted on a newer command. Packet ID matching alone does not establish payload freshness. A preloaded/delayed ACK payload is the working explanation; exact queue depth and update timing remain unknown.
 
+The [independent timing sequences](PROTOCOL_EXPERIMENTS.md#queued-replies-and-repeated-queries) commonly returned old `04` state, then the preceding `03` reply with new settings, then fresh `04` state, even with requested 500 ms delays. Eight identical status queries using the same PID kept returning the old payload; changing the PID or query contents advanced replies in the tested cases. This is consistent with PID/content-based duplicate handling, but the exact cache rules remain unknown.
+
 The bridge's policy is:
 
 1. Send a `04` refresh request. Require a reply that passes the ordinary decoder, including CRC validation, with No-ACK set and the matching two-bit PID, but discard its state.
@@ -308,20 +325,20 @@ The current decoder requires:
 
 The decoder does **not** require a 25 K receive step, equal temperature fields, a valid rear temperature, zero favorite/unknown control bits, or zero trailing packing bits. It does not retain the rear temperature or favorite/Auto status. CRC-valid controller requests accepted by this filter, including `00`, `01`, `05`, `07`, and `08`, are treated as state snapshots and reconciled through fresh polling; their exact field write masks and snapshot freshness remain incompletely characterized.
 
-Rejected does not mean invalid BenQ traffic. The observed `0B` packet is a valid-CRC frame outside the decoder's supported command set. Pairing and other payload lengths may require different validation rules.
+Rejected does not mean invalid BenQ traffic. The probes established valid `06`/`0B` traffic, retained selection `3` and timeout `04` in lamp replies, and applied manual settings with suffixes other than `02`. Those values remain outside the bridge's supported set; acceptance by the lamp does not establish their complete semantics. Pairing and other payload lengths may require different validation rules.
 
 ## Open questions
 
 | Area | What remains unknown | Evidence needed |
 |---|---|---|
 | Pairing | Upstream reports `0A` and address `E2 08 00 B0`; normal-address assignment/transfer and any encoding are unverified. Encryption during pairing is a hypothesis, not a finding. | Capture both directions through an entire pairing exchange and compare the resulting normal link |
-| Additional commands | Meaning of `01`, complete wake/sleep behavior, and whether `0B` is specifically a presence command | Repeat each controller action independently; correlate requests, replies, and physical effects |
-| Favorites | `07` applies supplied brightness on this pair; whether the lamp also stores a preset, the lamp-side effect of `08`, other write masks, necessity/complete status meaning of bit 2, and persistence remain unknown | Isolate `08` side effects and storage; vary selection/temperature/presence separately; test with Favorite clear and across controller/lamp power cycles |
-| Auto mode | Whether bit 1 is only a trigger or also a durable state, and how to identify completion | Follow replies while changing ambient light and while returning to manual control |
-| Field write masks | Which fields `02`, `03`, `04`, and `05` apply or persist beyond the verified effects | Change one field at a time under each command and obtain fresh lamp replies |
-| Temperature | The rear field's purpose under other commands/modes and the exact cause of reply-field lag; unequal `03` fields did not produce independent visible temperatures on the tested unit | Vary the rear field alone under other commands/modes and observe physical output alongside fresh replies |
-| Unknown bits/values | Control bits 6–7, selection `3`, suffix `02`, timeout values above `3`, and other payload lengths | Captures from other functions/revisions before relaxing decoder checks |
-| ACKs and timing | Payload queue depth, minimum settle time, controller retransmission/deduplication rules, and behavior with overlapping PIDs | Timestamped bidirectional captures with controlled loss, duplicates, and concurrent traffic |
+| Additional commands | Meaning of `01`, complete `00`/`05` wake/sleep behavior, and unobserved codes. `06` Auto and `0B` presence-enable effects are now confirmed on this pair | Repeat controller actions independently; correlate requests, replies, and physical effects |
+| Favorites | Whether the lamp also stores a preset, additional internal effects of `08`, internal role of bit 2, and persistence. Live setting changes work with the Favorite bit clear | Isolate preset storage and power-loss behavior; test other revisions |
+| Auto mode | Continuous regulation, completion, algorithm, and ambient-light response. A retained bit 1 is not a reliable indicator of activity; `06` triggers Auto with it clear | Controlled ambient changes and physical output measurement alongside replies |
+| Field write masks | Side effects beyond the tested fields/conditions, and why some acknowledged `05` sequences do not apply the timeout | Repeat controlled sequences with RF-edge timing and distinguish acceptance from application |
+| Temperature | Rear field's purpose and cause of unequal values; Auto retained the manual rear field while changing the first, and unequal manual `03` fields did not produce independent visible temperatures | Physical measurement under other commands/modes alongside fresh replies |
+| Unknown bits/values | Meaning of retained bits 6–7, visible effect of selection `3`, suffix behavior beyond manual `03`, duration of timeout `04` and any higher values, other payload lengths | Controlled physical observations and captures from other functions/revisions |
+| ACKs and timing | Payload/cache depth, exact PID/content duplicate rules, minimum settle time, timeout-sequencing exceptions, controller retransmission rules, and overlapping traffic | Timestamped bidirectional captures with controlled loss, duplicates, and concurrent traffic |
 | Presence timing | Exact timer reset/retrigger rules, countdown/occupancy telemetry, and persistence across lamp power loss | Timed motion/no-motion and power-cycle observations alongside packet capture |
 | Channels and revisions | Channel choice/hopping, multi-lamp reply arbitration, and compatibility across product revisions | Captures on the other frequencies and from additional paired units |
 

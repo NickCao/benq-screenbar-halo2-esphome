@@ -20,8 +20,8 @@ coordinator's protected state.
   expected settings, command codes, and request PCFs, and support address discovery.
 - Favorite frames retain CRC, address, framing, and payload validation. Replies
   are accepted only when explicitly enabled.
-- Legacy `0x00..0x05` commands remain accepted; unknown `0x06` and later unsupported
-  commands remain rejected.
+- Legacy `0x00..0x05` commands remain accepted; `0x06`, `0x0B`, and other
+  unsupported command codes remain rejected.
 
 ## Coordinator coverage
 
