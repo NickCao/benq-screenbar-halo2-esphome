@@ -86,7 +86,7 @@ Status polling uses command `0x04`, with a five-second default cycle. It starts 
 
 Observed ACKs can contain an earlier command's state, consistent with the lamp preloading its reply before processing the triggering request. This includes an old ON immediately after HA turns the lamp OFF. Each polling cycle therefore:
 
-1. Sends a refresh query and waits for a CRC-valid reply with the matching two-bit packet ID. Its state is discarded, regardless of the command byte.
+1. Sends a refresh query and waits for a decoded CRC-valid reply with the matching two-bit packet ID. Its state is discarded, regardless of which supported command it carries. Replies rejected by the ordinary decoder cannot advance the polling cycle.
 2. After that acknowledgement, waits 500 ms for the lamp to update its queued payload, then sends a second query.
 3. Accepts only a matching reply carrying command `0x04` as current lamp state. If an older command reply is still queued, retries the read after another 500 ms, up to three read attempts in total.
 
