@@ -96,7 +96,7 @@ The pattern occurred with requested inter-query delays from zero to 500 ms, repe
 
 Eight identical status queries using PID `0` repeatedly returned the old `04`/37% payload even though a subsequent rotating-PID read confirmed 53%. Rotating PIDs advanced through the old/status, settings, and fresh/status replies. Keeping PID `0` while alternating an unused query brightness field also advanced the replies after an unsuccessful receive. Changing settings payloads while reusing one PID likewise reached the final requested brightness.
 
-This is consistent with duplicate handling involving PID and packet contents/CRC, rather than PID alone. The exact matching/cache rules are not established. The evidence supports rotating PIDs and rejecting queued non-status replies; it does not prove freshness under simultaneous controller traffic.
+The [BC5602 transport comparison](PROTOCOL.md#replies-polling-and-ordering), reviewed on 2026-10-01, supplies a hardware basis for this interpretation. The lamp's actual queue usage and duplicate behavior under concurrent traffic remain unverified. The evidence supports rotating PIDs and rejecting queued non-status replies; it does not prove freshness under simultaneous controller traffic.
 
 No CRC-valid packets were received during the 30.02-second interval with bridge transmissions disabled after Auto. This only establishes that no unsolicited updates were captured in that interval.
 
@@ -109,10 +109,12 @@ Several requests to shorten timeout index `03` to `01` were not reflected in fre
 - Focused checks after `02` also failed with requested 100/600 ms pauses in the tested grouped sequences; requested 1.5/3-second pauses succeeded.
 - A `03`-only predecessor succeeded with a requested 600 ms pause. A three-second-pause run did not capture a matching valid ACK and did not apply the reset; a later retry succeeded.
 
+Review of the saved journal on 2026-10-01 found that all five acknowledged failures used a different PID and CRC from the immediately preceding transmitted request. They were not copies of that request under the documented BC5602 duplicate test. This comparison does not identify the lamp's last accepted packet, so duplicate handling involving an earlier packet remains possible.
+
 The missing-ACK case must be distinguished from the acknowledged failures. These limited measurements do not establish a clean delay threshold or a fully characterized `02`-specific requirement. Packet acceptance, duplicate handling, command processing, ACK timing, and bridge/radio scheduling remain possible contributors. The captured device timestamps are needed to compare actual submission intervals. A successful local TX or matching ACK is insufficient proof that the requested timeout was applied.
 
 ## Remaining unknowns and cleanup
 
-The remaining gaps include pairing, `00`/`01` side effects, preset storage and power-loss persistence, continuous Auto/completion semantics, physical output for selection `3`, reserved-bit meanings, suffix behavior under other commands, the duration represented by timeout `04`, presence timer/motion behavior, exact ACK/cache/timeout-sequencing rules, and other channels or hardware revisions.
+The remaining gaps include pairing, `00`/`01` side effects, preset storage and power-loss persistence, continuous Auto/completion semantics, physical output for selection `3`, reserved-bit meanings, suffix behavior under other commands, the duration represented by timeout `04`, presence timer/motion behavior, lamp ACK FIFO usage and duplicate/timeout-sequencing behavior, and other channels or hardware revisions.
 
 The raw experiment sources and complete journal are retained locally in `.esphome/captures/protocol-probes-20261001T015319Z/`; the exported evidence contains no credentials. The final script replayed the last controller-captured Favorite (48%, 2700 K, presence enabled, five-minute timeout) and verified the saved live settings: both sections on at 12%, 2700 K, presence enabled, five-minute timeout. The user took over firmware/settings restoration after stopping testing; production-firmware restoration was not performed or verified by the agent for this experiment.

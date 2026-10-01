@@ -19,6 +19,8 @@ The [independent command probes](PROTOCOL_EXPERIMENTS.md) cover 120 command case
 
 Earlier research comes from [kuzmin-no's integration](https://github.com/kuzmin-no/BenQ_ScreenBar_HALO_2_HA_integration#technical-details). Its wake/sleep and pairing labels are useful leads, but its fixed payload ending `01 02` is incomplete: the penultimate byte is the configurable inactivity timeout. The [BenQ product information](https://www.benq.com/en-sg/campaign/elevate-with-halo.html) independently lists the four available durations. Neither source documents the complete command behavior below.
 
+The [Djoko-cli Halo 1 reference](https://github.com/Djoko-cli/benq-screenbar-halo-matter/blob/main/docs/PROTOCOL.md) adds related BC5602 transport evidence. Its corrected 2026-09-24 summary supersedes parts of the historical log. Halo 1 uses two-byte requests and empty ACKs, whereas the Halo 2 captures here establish ten-byte requests and settings replies. Shared radio behavior informs the interpretation below; command mappings, brightness limits, pairing, and storage remain specific to each model.
+
 All byte values in hex examples are hexadecimal. Bit 0 is the least significant bit. Payload offsets start at the command byte; canonical-frame offsets additionally include the one-byte PCF representation.
 
 ## Radio link
@@ -216,6 +218,8 @@ Cleanup replayed `08` for the last controller-captured 48% favorite, restored th
 
 The agreed integration scope is to decode incoming controller `07`/`08` snapshots so the bridge follows controller actions, then reconcile actual lamp state through fresh `04` replies. This does not require the bridge to store a favorite, expose save/recall actions, or transmit favorite commands. Knowing whether the lamp keeps another preset copy is unnecessary for following those messages. This is bridge policy, not a statement that the lamp has no preset storage.
 
+The [Halo 1 reference](https://github.com/Djoko-cli/benq-screenbar-halo-matter/blob/main/docs/PROTOCOL.md) reports a controller-stored Favorite replayed as settings frames. This is consistent with the Halo 2 controller supplying Favorite settings, but supplies no evidence about additional Halo 2 lamp-side storage.
+
 The decoder accepts `00..05` plus explicit `07`/`08` entries. Confirmed commands `06` and `0B` remain unsupported by the production decoder; the independent probes did not add runtime support. Favorite requests retain their original command codes and use the ordinary controller-snapshot path: publish the supplied settings without echoing a command, then schedule a fresh lamp poll. Favorite bit `04` is not retained in bridge state. The snapshot does not establish that every supplied field became the lamp's current state; fresh `04` replies reconcile it.
 
 Decoded favorite replies follow the existing status-poll rules. A matching reply can acknowledge the refresh query, but a queued `07`/`08` reply to the read query cannot publish lamp state and instead triggers a delayed retry while attempts remain. Only a matching `04` reply after refresh is accepted as fresh lamp state.
@@ -260,6 +264,8 @@ The CRC is 16 bits, polynomial `0x1021`, initial value `0xFFFF`, processed most 
 
 Preamble, transmitted CRC, and the seven trailing packing bits are excluded. There are no extra zero bits appended to the calculation. The resulting CRC is sent high byte first.
 
+The nine-bit PCF and this CRC model agree with the [BC5602 datasheet, pp. 25–28](https://www.holtek.com/webapi/116711/BC5602v120.pdf#page=25). The LR1121 codec reproduces those fields in software.
+
 An equivalent bitwise calculation is:
 
 ```text
@@ -295,7 +301,11 @@ Lamp state has been obtained through replies to requests; unsolicited updates af
 
 **Confirmed:** a matching ACK can contain state from before the triggering request, even after the lamp has already acted on a newer command. Packet ID matching alone does not establish payload freshness. A preloaded/delayed ACK payload is the working explanation; exact queue depth and update timing remain unknown.
 
-The [independent timing sequences](PROTOCOL_EXPERIMENTS.md#queued-replies-and-repeated-queries) commonly returned old `04` state, then the preceding `03` reply with new settings, then fresh `04` state, even with requested 500 ms delays. Eight identical status queries using the same PID kept returning the old payload; changing the PID or query contents advanced replies in the tested cases. This is consistent with PID/content-based duplicate handling, but the exact cache rules remain unknown.
+The [independent timing sequences](PROTOCOL_EXPERIMENTS.md#queued-replies-and-repeated-queries) commonly returned old `04` state, then the preceding `03` reply with new settings, then fresh `04` state, even with requested 500 ms delays. Eight identical status queries using the same PID kept returning the old payload; changing the PID or query contents advanced replies in the tested cases.
+
+The [BC5602 datasheet, pp. 26–28](https://www.holtek.com/webapi/116711/BC5602v120.pdf#page=26) describes duplicate detection using the latest PID and CRC: matching both suppresses delivery to the MCU. Retransmissions retain their PID; new packets advance it. The [Halo 1 reference](https://github.com/Djoko-cli/benq-screenbar-halo-matter/blob/main/docs/PROTOCOL.md) notes that duplicates are still acknowledged. **Inference:** this mechanism fits the Halo 2 repeated-query results. An ACK therefore need not represent a newly processed request.
+
+The datasheet also describes a three-entry TX FIFO that can hold ACK payloads. **Inference:** preloaded replies provide a plausible source of old state and preceding-command replies. The lamp's actual FIFO usage, response-update timing, and duplicate behavior under overlapping traffic remain unverified.
 
 The bridge's policy is:
 
@@ -308,6 +318,8 @@ The reply deadline is 200 ms from TX_DONE. The LR1121 itself opens an approximat
 Normal light/settings commands are not automatically retransmitted until acknowledged. TX_DONE establishes local transmission only. The following status cycle reconciles actual lamp state; three timed-out cycles produce a warning and retain the last known state. Polling pauses while local commands or light transitions are pending. The bridge cancels stale polling cycles before transmitting new local commands.
 
 The bridge rotates its own two-bit PID through `0..3`. There is no independent sender ID, timestamp, or wider transaction counter in the decoded payload. Simultaneous controller/bridge traffic, collisions, PID reuse, and duplicate-request suppression are not fully characterized. The refresh/read procedure reduces stale-state problems; it is not a proof of freshness under every possible interleaving.
+
+The [acknowledged timeout failures](PROTOCOL_EXPERIMENTS.md#timeout-sequencing-exception) each differed in PID and CRC from the immediately preceding transmitted request. Comparison with that preceding request leaves these failures unexplained; the lamp's last accepted packet and internal processing were not observed.
 
 While listening to the original controller, the bridge must not send ACKs or automatically switch from RX to TX. Otherwise it could interfere with the lamp's own response. The LR1121 driver disables automatic direction switching before passive reception.
 
@@ -338,7 +350,7 @@ Rejected does not mean invalid BenQ traffic. The probes established valid `06`/`
 | Field write masks | Side effects beyond the tested fields/conditions, and why some acknowledged `05` sequences do not apply the timeout | Repeat controlled sequences with RF-edge timing and distinguish acceptance from application |
 | Temperature | Rear field's purpose and cause of unequal values; Auto retained the manual rear field while changing the first, and unequal manual `03` fields did not produce independent visible temperatures | Physical measurement under other commands/modes alongside fresh replies |
 | Unknown bits/values | Meaning of retained bits 6–7, visible effect of selection `3`, suffix behavior beyond manual `03`, duration of timeout `04` and any higher values, other payload lengths | Controlled physical observations and captures from other functions/revisions |
-| ACKs and timing | Payload/cache depth, exact PID/content duplicate rules, minimum settle time, timeout-sequencing exceptions, controller retransmission rules, and overlapping traffic | Timestamped bidirectional captures with controlled loss, duplicates, and concurrent traffic |
+| ACKs and timing | Lamp ACK FIFO usage, PID/CRC duplicate behavior under loss, PID reuse and overlapping traffic, minimum settle time, timeout-sequencing exceptions, and controller retransmission rules | Timestamped bidirectional captures with controlled loss, duplicates, and concurrent traffic |
 | Presence timing | Exact timer reset/retrigger rules, countdown/occupancy telemetry, and persistence across lamp power loss | Timed motion/no-motion and power-cycle observations alongside packet capture |
 | Channels and revisions | Channel choice/hopping, multi-lamp reply arbitration, and compatibility across product revisions | Captures on the other frequencies and from additional paired units |
 
