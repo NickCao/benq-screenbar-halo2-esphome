@@ -1,6 +1,6 @@
 esphome:
   name: screenbar-halo2
-  friendly_name: BenQ ScreenBar HALO 2
+  friendly_name: ScreenBar
   min_version: 2026.9.0
 
 external_components:
@@ -30,8 +30,9 @@ halo2:
   id: screenbar
   light:
     id: master_lamp
-    name: "ScreenBar"
-    icon: mdi:desk-lamp
+    # Use the device name once in HA; ScreenBar also preserves the existing light key.
+    name: ""
+    icon: mdi:wall-sconce-flat
     initial_state:
       brightness: 91%
       color_temperature: 3925 K

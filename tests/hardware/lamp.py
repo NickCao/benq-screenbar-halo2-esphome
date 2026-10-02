@@ -74,13 +74,13 @@ class Lamp:
 
     def entity(self, name, kind):
         matches = [info for label, info in self.entities.items()
-                   if isinstance(info, kind) and label.lower().endswith(name.lower())]
+                   if isinstance(info, kind) and (name is None or label.lower().endswith(name.lower()))]
         if len(matches) != 1:
-            raise AssertionError(f"Expected one {kind.__name__} named {name!r}; found {len(matches)}")
+            raise AssertionError(f"Expected one {kind.__name__} matching {name!r}; found {len(matches)}")
         return matches[0]
 
-    def light(self, name, *, transition_length=0, **values):
-        self.api.light_command(self.entity(name, LightInfo).key, transition_length=transition_length, **values)
+    def light(self, *, transition_length=0, **values):
+        self.api.light_command(self.entity(None, LightInfo).key, transition_length=transition_length, **values)
 
     def select(self, option):
         self.api.select_command(self.entity("Ultrasonic sensor", SelectInfo).key, option)
@@ -112,8 +112,8 @@ class Lamp:
             f"Last readback: {last}. Recent radio messages: {list(self.radio_messages)}"
         )
 
-    async def wait_light_state(self, name, *, timeout=3, **expected):
-        return await self.wait_entity_state(name, LightInfo, timeout=timeout, **expected)
+    async def wait_light_state(self, *, timeout=3, **expected):
+        return await self.wait_entity_state(None, LightInfo, timeout=timeout, **expected)
 
     async def wait_number_state(self, name, value, *, timeout=3):
         return await self.wait_entity_state(name, NumberInfo, timeout=timeout, state=value)

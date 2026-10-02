@@ -36,7 +36,7 @@ async def baseline_profile(lamp):
     since = monotonic()
     lamp.select("Disabled")
     lamp.sections("Both")
-    lamp.light("ScreenBar", state=True, color_temperature=1_000_000 / 4500)
+    lamp.light(state=True, color_temperature=1_000_000 / 4500)
     lamp.number("Front brightness", 37)
     lamp.number("Back brightness", 62)
     await lamp.wait_readback(

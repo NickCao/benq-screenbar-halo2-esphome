@@ -76,6 +76,8 @@ The component currently supports one radio/bridge instance per device. LR1121 wi
 
 ## Light defaults and state
 
+The master light has `name: ""` so HA uses the device name once. The common package sets `friendly_name: ScreenBar`, which also preserves the API key of the earlier explicitly named ScreenBar light.
+
 The master light uses zero-length transitions by default and `gamma_correct: 1.0`; other gamma values are rejected because the lamp already accepts brightness percentages. Its restore mode is `RESTORE_DEFAULT_OFF`.
 
 The common package provides initial brightness values of 12% front / 91% back and a shared 3925 K temperature. Saved master power/temperature and lighting mode are restored at startup, with the configured section brightness defaults used until readback. Initialization sends no settings or power commands. LR1121 queries the lamp, and local controls are accepted after the first valid lamp/controller state. Both section levels and all other settings are then reconciled with received state.
@@ -109,6 +111,8 @@ An explicit address takes precedence over preferences at boot. Remove `radio_add
 
 ## Optional dashboard
 
+The firmware advertises front/back brightness as number entities in slider mode. Dashboard cards and their features are configured in HA; firmware updates do not install a dashboard. The supplied dashboard uses Tile cards with `numeric-input` features and `style: slider` to keep both brightness controls visible. To configure an existing dashboard through the UI, add a Tile card for each brightness number, then add the Numeric input feature with Slider style. [HA card features](https://www.home-assistant.io/dashboards/features/#numeric-input)
+
 The native API integration is sufficient for control. To install the supplied YAML dashboard, copy [`home-assistant/dashboard.yaml`](../home-assistant/dashboard.yaml) to your HA configuration as `dashboards/screenbar_halo2.yaml` and register it in `configuration.yaml`:
 
 ```yaml
@@ -122,7 +126,7 @@ lovelace:
       filename: dashboards/screenbar_halo2.yaml
 ```
 
-Merge this into an existing `lovelace:` section if present. Adjust the dashboard entity IDs to the ones in your HA installation. There is no HA package or REST polling automation to copy.
+Merge this into an existing `lovelace:` section if present. The dashboard uses entity IDs for a new installation with the default ScreenBar device name. Existing installations retain their entity IDs; adjust the dashboard to match yours. There is no HA package or REST polling automation to copy.
 
 Use the master ScreenBar light for HA light controls and automations. Its ON action retains the selected lighting mode; use Lighting mode to choose sections explicitly.
 

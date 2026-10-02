@@ -6,29 +6,35 @@ views:
     icon: mdi:monitor-shimmer
     cards:
       - type: tile
-        entity: light.benq_screenbar_halo_2_screenbar
+        entity: light.screenbar
         name: ScreenBar
-        icon: mdi:desk-lamp
+        icon: mdi:wall-sconce-flat
         features:
           - type: light-brightness
           - type: light-color-temp
 
       - type: tile
-        entity: select.benq_screenbar_halo_2_lighting_mode
+        entity: select.screenbar_lighting_mode
         name: Lighting mode
         tap_action:
           action: more-info
 
-      - type: entities
-        title: Section brightness
-        entities:
-          - entity: number.benq_screenbar_halo_2_front_brightness
-            name: Front
-          - entity: number.benq_screenbar_halo_2_back_brightness
-            name: Back
+      - type: tile
+        entity: number.screenbar_front_brightness
+        name: Front brightness
+        features:
+          - type: numeric-input
+            style: slider
 
       - type: tile
-        entity: select.benq_screenbar_halo_2_ultrasonic_sensor
+        entity: number.screenbar_back_brightness
+        name: Back brightness
+        features:
+          - type: numeric-input
+            style: slider
+
+      - type: tile
+        entity: select.screenbar_ultrasonic_sensor
         name: Automatic presence mode
         icon: mdi:motion-sensor
         tap_action:
