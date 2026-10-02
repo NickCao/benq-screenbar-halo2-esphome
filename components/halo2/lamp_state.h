@@ -82,18 +82,15 @@ class LampStateModel {
     invalidate();
   }
   void request(const LampState &state) { requested_ = state; }
-  bool receive_request(const LampState &state) { return apply_received_(state); }
-  bool receive_status(const LampState &state) { return apply_received_(state); }
-  void invalidate() { initialized_ = false; }
-
- private:
-  bool apply_received_(const LampState &state) {
+  bool receive_snapshot(const LampState &state) {
     const bool changed = !initialized_ || requested_ != state;
     requested_ = state;
     initialized_ = true;
     return changed;
   }
+  void invalidate() { initialized_ = false; }
 
+ private:
   LampState requested_;
   bool initialized_{false};
 };

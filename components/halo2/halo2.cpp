@@ -316,7 +316,7 @@ void Halo2::save_mode_() {
 
 bool Halo2::apply_received_(const protocol::ReceivedPacket &received) {
   const auto &state = received.state;
-  const bool changed = received.is_reply() ? lamp_state_.receive_status(state) : lamp_state_.receive_request(state);
+  const bool changed = lamp_state_.receive_snapshot(state);
   lifecycle_.on_received_state();
   // Persist received settings even when they match an optimistic local change.
   // ESPHome skips flash writes when the stored preference is unchanged.

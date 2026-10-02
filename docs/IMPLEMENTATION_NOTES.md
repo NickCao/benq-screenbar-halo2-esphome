@@ -23,7 +23,7 @@ The [independent protocol probes](PROTOCOL_EXPERIMENTS.md) additionally establis
 
 ## HA state and radio commands
 
-`LampState` contains global power, a front/back selection enum, two brightness values, shared temperature, presence-mode enable, and inactivity timeout. `LampStateModel` keeps requested settings for outgoing commands and the optimistic UI, together with a flag indicating whether a received baseline has been established. HA commands update requested settings; controller snapshots and accepted fresh lamp status replies reconcile them. Matching replies do not republish initialized settings.
+`LampState` contains global power, a front/back selection enum, two brightness values, shared temperature, presence-mode enable, and inactivity timeout. `LampStateModel` keeps requested settings for outgoing commands and the optimistic UI, together with a flag indicating whether a received baseline has been established. HA commands update requested settings; controller snapshots and accepted fresh lamp status replies reconcile them through the same `receive_snapshot()` method. The coordinator handles packet direction and reply freshness. Matching snapshots do not republish initialized settings.
 
 Fresh brightness readback reconciles both stored levels, including unselected sections. Controller snapshots likewise replace the complete settings. Number entities show the actual stored values independently of selection and power. The lamp applies brightness only to selected sections, so inactive number edits return to the stored level; select a section before editing it.
 

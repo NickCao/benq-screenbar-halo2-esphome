@@ -39,16 +39,16 @@ static void restored_settings_require_received_state() {
 
   // Hearing the controller establishes settings for further commands, but
   // does not prove that the lamp applied them.
-  CHECK(model.receive_request(saved));
+  CHECK(model.receive_snapshot(saved));
   CHECK(model.initialized());
   CHECK(model.requested() == saved);
-  CHECK(!model.receive_request(saved));
+  CHECK(!model.receive_snapshot(saved));
 }
 
 static void controller_snapshots_replace_local_requests() {
   LampStateModel model;
   const auto confirmed = initial_state();
-  CHECK(model.receive_status(confirmed));
+  CHECK(model.receive_snapshot(confirmed));
 
   auto local = confirmed;
   local.selection = LampSelection::BACK_ONLY;
@@ -58,37 +58,37 @@ static void controller_snapshots_replace_local_requests() {
 
   auto controller = local;
   controller.back_brightness = 25;
-  CHECK(model.receive_request(controller));
+  CHECK(model.receive_snapshot(controller));
   CHECK(model.requested() == controller);
 }
 
-static void matching_status_only_republishes_when_establishing_a_baseline() {
+static void matching_snapshots_only_republish_when_establishing_a_baseline() {
   LampStateModel model;
   const auto controller = initial_state();
-  CHECK(model.receive_request(controller));
-  CHECK(!model.receive_status(controller));
+  CHECK(model.receive_snapshot(controller));
+  CHECK(!model.receive_snapshot(controller));
   CHECK(model.requested() == controller);
 
   model.restore(controller);
-  CHECK(model.receive_status(controller));
+  CHECK(model.receive_snapshot(controller));
   CHECK(model.initialized());
-  CHECK(!model.receive_status(controller));
+  CHECK(!model.receive_snapshot(controller));
 }
 
 static void lamp_readback_reconciles_a_failed_request() {
   LampStateModel model;
   const auto actual = initial_state();
-  model.receive_status(actual);
+  model.receive_snapshot(actual);
   auto desired = actual;
   desired.power = false;
   desired.ultrasonic_enabled = false;
   model.request(desired);
 
-  CHECK(model.receive_status(actual));
+  CHECK(model.receive_snapshot(actual));
   CHECK(model.requested().power);
   CHECK(model.requested().ultrasonic_enabled);
   CHECK(model.requested() == actual);
-  CHECK(!model.receive_status(actual));
+  CHECK(!model.receive_snapshot(actual));
 }
 
 static void settings_are_independent_of_power_and_selection() {
@@ -118,20 +118,20 @@ static void fresh_readback_reconciles_inactive_stored_brightness() {
     LampStateModel model;
     auto actual = initial_state();
     actual.selection = section == Section::FRONT ? LampSelection::BACK_ONLY : LampSelection::FRONT_ONLY;
-    model.receive_status(actual);
+    model.receive_snapshot(actual);
     auto requested = actual;
     requested.set_brightness(section, 80);
     model.request(requested);
     actual.set_brightness(section, 1);
-    CHECK(model.receive_status(actual));
+    CHECK(model.receive_snapshot(actual));
     CHECK(model.requested() == actual);
-    CHECK(!model.receive_status(actual));
+    CHECK(!model.receive_snapshot(actual));
     actual.set_brightness(section, 25);
-    CHECK(model.receive_request(actual));
+    CHECK(model.receive_snapshot(actual));
     CHECK(model.requested() == actual);
     model.invalidate();
     actual.set_brightness(section, 30);
-    CHECK(model.receive_status(actual));
+    CHECK(model.receive_snapshot(actual));
     CHECK(model.requested() == actual);
   }
 }
@@ -151,7 +151,7 @@ static void brightness_changes_preserve_the_other_section() {
 static void recovery_retains_requests_but_requires_a_new_baseline() {
   LampStateModel model;
   const auto confirmed = initial_state();
-  model.receive_status(confirmed);
+  model.receive_snapshot(confirmed);
   auto local = confirmed;
   local.power = false;
   model.request(local);
@@ -161,7 +161,7 @@ static void recovery_retains_requests_but_requires_a_new_baseline() {
   CHECK(model.requested() == local);
   model.request(local);
   CHECK(!model.initialized());
-  CHECK(model.receive_status(confirmed));
+  CHECK(model.receive_snapshot(confirmed));
   CHECK(model.initialized());
   CHECK(model.requested() == confirmed);
 
@@ -226,7 +226,7 @@ static void dimming_handles_minimum_levels_and_rounding() {
 int main() {
   restored_settings_require_received_state();
   controller_snapshots_replace_local_requests();
-  matching_status_only_republishes_when_establishing_a_baseline();
+  matching_snapshots_only_republish_when_establishing_a_baseline();
   lamp_readback_reconciles_a_failed_request();
   settings_are_independent_of_power_and_selection();
   fresh_readback_reconciles_inactive_stored_brightness();
