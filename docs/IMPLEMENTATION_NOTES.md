@@ -7,7 +7,7 @@ The bridge follows the [ESPHome external-component layout](https://esphome.io/co
 | File | Responsibility |
 |---|---|
 | `__init__.py` | Configuration validation, entity creation, SPI registration, and GPIO code generation |
-| `lamp_state.h` | Lamp settings, section/brightness rules, and requested-state reconciliation; independent of ESPHome and radio metadata |
+| `lamp_state.h` | Lamp settings and section/brightness rules; independent of ESPHome and radio metadata |
 | `command_queue.h` | Changed settings to command batches, coalescing, Auto brightness intent, TX completion, and cooldown; independent of ESPHome |
 | `bridge_state.h` | Lifecycle and status-poll state machines plus a scoped publication guard; independent of ESPHome |
 | `halo2_light.cpp` | Master light conversion, section settings, proportional dimming, preference restoration, and readback |
@@ -23,11 +23,11 @@ The [independent protocol probes](PROTOCOL_EXPERIMENTS.md) additionally establis
 
 ## HA state and radio commands
 
-`LampState` contains global power, a front/back selection enum, two brightness values, shared temperature, presence-mode enable, and inactivity timeout. `LampStateModel` keeps requested settings for outgoing commands and the optimistic UI, together with a flag indicating whether a received baseline has been established. HA commands update requested settings; controller snapshots and accepted fresh lamp status replies reconcile them through the same `receive_snapshot()` method. The coordinator handles packet direction and reply freshness. Matching snapshots do not republish initialized settings.
+`LampState` contains global power, a front/back selection enum, two brightness values, shared temperature, presence-mode enable, and inactivity timeout. `Halo2` stores these settings directly for outgoing commands and the optimistic UI. HA commands update them; controller snapshots and accepted fresh lamp status replies replace them through the same `apply_received_()` path. The coordinator handles packet direction and reply freshness. `BridgeLifecycle::active()` indicates whether a received baseline has been established. The first valid snapshot publishes even when its settings match the displayed state; matching snapshots do not republish an active baseline.
 
 Fresh brightness readback reconciles both stored levels, including unselected sections. Controller snapshots likewise replace the complete settings. Number entities show the actual stored values independently of selection and power. The lamp applies brightness only to selected sections, so inactive number edits return to the stored level; select a section before editing it.
 
-Packet command, PCF, and request/reply direction belong to `ReceivedPacket`, alongside its decoded `LampState`. Decoder success is reported by its return value; initialization belongs to the state model. Packet metadata cannot become part of requested lamp settings.
+Packet command, PCF, and request/reply direction belong to `ReceivedPacket`, alongside its decoded `LampState`. Decoder success is reported by its return value; baseline validity belongs to the lifecycle. Packet metadata cannot become part of requested lamp settings.
 
 Original-controller Favorite recall (`0x07`) and save (`0x08`) requests use the same snapshot path as other controller requests: publish settings without echoing a command, then schedule fresh lamp polling to reconcile the actual state. Their command codes remain packet metadata, and the Favorite flag is not retained. The bridge has no favorite storage or save/recall actions and does not transmit these commands. Favorite replies can acknowledge a matching refresh query, but only a fresh matching `0x04` reply can publish lamp state.
 
@@ -120,7 +120,7 @@ The [protocol reference](PROTOCOL.md#framing-and-packet-control-field) is the so
 
 ## Reliability and verification
 
-The [native coordinator suite](../tests/README.md) runs the production component, master light adapter, settings entities, protocol, and LR1121 driver together against a scripted chip and minimal ESPHome interfaces. It checks packet ordering, command/poll arbitration, interrupted batches, discovery and recovery, publication guards, retained presence-wake settings, proportional dimming, and transition handling. Time and packet arrivals are controlled by the tests. It complements the isolated state-model tests; real framework interpolation and RF behavior remain covered by compilation and opt-in hardware checks.
+The [native coordinator suite](../tests/README.md) runs the production component, master light adapter, settings entities, protocol, and LR1121 driver together against a scripted chip and minimal ESPHome interfaces. It checks packet ordering, command/poll arbitration, interrupted batches, discovery and recovery, publication guards, retained presence-wake settings, proportional dimming, and transition handling. Time and packet arrivals are controlled by the tests. It complements the isolated lamp-settings, command-queue, lifecycle, and polling tests; real framework interpolation and RF behavior remain covered by compilation and opt-in hardware checks.
 
 **Command sent** means the radio completed transmission and reported TX_DONE, not that a visible lamp change was confirmed. **Lamp status received** means a refresh/read polling cycle returned validated lamp state.
 

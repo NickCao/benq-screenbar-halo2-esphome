@@ -125,7 +125,9 @@ class Halo2 : public PollingComponent {
   uint8_t app_pid_{0};
   uint8_t last_pcf_{0};
   uint32_t recovery_delay_{RECOVERY_INITIAL_DELAY_MS};
-  LampStateModel lamp_state_;
+  // Requested settings drive outgoing commands and the optimistic UI.
+  // The lifecycle owns whether a received baseline has been established.
+  LampState lamp_state_;
   uint32_t frequency_deviation_{LR1121Radio::DEFAULT_DEVIATION_HZ};
   uint8_t pulse_shape_{LR1121Radio::DEFAULT_PULSE_SHAPE};
   CommandQueue commands_;

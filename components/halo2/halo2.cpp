@@ -31,7 +31,7 @@ void Halo2::setup() {
   initial.front_brightness = initial_brightness_[0];
   initial.back_brightness = initial_brightness_[1];
   light_->restore_into(initial);
-  lamp_state_.restore(initial);
+  lamp_state_ = initial;
   save_mode_();
   publish_light_();
   // Read the sensor's enable/timeout settings from the lamp before accepting
@@ -46,9 +46,7 @@ void Halo2::setup() {
   if (restored) {
     radio_address_ = saved.address;
     radio_channel_ = saved.channel;
-    auto requested = lamp_state_.requested();
-    requested.ultrasonic_timeout = saved.ultrasonic_timeout;
-    lamp_state_.request(requested);
+    lamp_state_.ultrasonic_timeout = saved.ultrasonic_timeout;
   }
   lifecycle_ = BridgeLifecycle(auto_discover_ && !address_configured_ && !restored);
   // Setup, reception, transmission and recovery all advance in loop().
@@ -75,7 +73,6 @@ void Halo2::recover_radio_() {
   // Never replay an interrupted command batch after reconnecting to the lamp.
   cancel_requests_();
   cancel_timeout("discovery_dwell");
-  lamp_state_.invalidate();
   status_set_warning();
   const char *error = radio_.last_error();
   if (error == nullptr) error = "LR1121 unavailable";
@@ -99,7 +96,6 @@ void Halo2::start_discovery() {
   if (!lifecycle_.begin_discovery()) return;
   cancel_requests_();
   cancel_timeout("discovery_dwell");
-  lamp_state_.invalidate();
   candidates_ = {};
   scan_step_ = 0;
   discovery_phase_ = DiscoveryPhase::CHANNEL_PENDING;
@@ -255,8 +251,8 @@ void Halo2::dump_config() {
 }
 
 void Halo2::request_state_(const LampState &requested) {
-  commands_.request(lamp_state_.requested(), requested);
-  lamp_state_.request(requested);
+  commands_.request(lamp_state_, requested);
+  lamp_state_ = requested;
   save_mode_();
 }
 
@@ -270,7 +266,7 @@ bool Halo2::send_batch_(std::span<const protocol::AirFrame> frames, TxOwner owne
 }
 
 protocol::AirFrame Halo2::make_frame_(Command command, bool auto_brightness) {
-  const auto &requested = lamp_state_.requested();
+  const auto &requested = lamp_state_;
   ESP_LOGD(TAG, "TX command 0x%02X, power %s, mode %u/%u, front %u%%, back %u%%, %u K", command, ONOFF(requested.power),
            requested.selected(Section::FRONT), requested.selected(Section::BACK), requested.front_brightness,
            requested.back_brightness, requested.color_temperature);
@@ -286,7 +282,7 @@ void Halo2::start_auto_brightness() {
 
 void Halo2::control_ultrasonic(size_t index) {
   if (!accepts_commands() || index > static_cast<size_t>(UltrasonicTimeout::MINUTES_15) + 1U) return;
-  auto requested = lamp_state_.requested();
+  auto requested = lamp_state_;
   requested.ultrasonic_enabled = index != 0;
   if (requested.ultrasonic_enabled) requested.ultrasonic_timeout = static_cast<UltrasonicTimeout>(index - 1);
   request_state_(requested);
@@ -295,7 +291,7 @@ void Halo2::control_ultrasonic(size_t index) {
 
 void Halo2::publish_ultrasonic_() {
   // Disabling presence detection retains the lamp's last timeout duration.
-  const auto &requested = lamp_state_.requested();
+  const auto &requested = lamp_state_;
   ultrasonic_select_->publish_state(requested.ultrasonic_enabled ? static_cast<size_t>(requested.ultrasonic_timeout) + 1
                                                                  : size_t{0});
 }
@@ -306,7 +302,7 @@ void Halo2::publish_status_(const char *status) {
 }
 
 void Halo2::save_mode_() {
-  const auto &requested = lamp_state_.requested();
+  const auto &requested = lamp_state_;
   const uint8_t mode = (requested.selected(Section::FRONT) ? SavedMode::FRONT : SavedMode::NONE) |
                        (requested.selected(Section::BACK) ? SavedMode::BACK : SavedMode::NONE);
   if (mode == saved_mode_) return;
@@ -316,7 +312,8 @@ void Halo2::save_mode_() {
 
 bool Halo2::apply_received_(const protocol::ReceivedPacket &received) {
   const auto &state = received.state;
-  const bool changed = lamp_state_.receive_snapshot(state);
+  const bool changed = !lifecycle_.active() || lamp_state_ != state;
+  lamp_state_ = state;
   lifecycle_.on_received_state();
   // Persist received settings even when they match an optimistic local change.
   // ESPHome skips flash writes when the stored preference is unchanged.
@@ -348,7 +345,7 @@ void Halo2::process_radio_() {
 
 void Halo2::send_commands_() {
   if (!radio_.idle()) return;
-  const auto batch = commands_.take(lamp_state_.requested(), millis());
+  const auto batch = commands_.take(lamp_state_, millis());
   if (!batch) return;
   status_poll_.cancel();
   std::array<protocol::AirFrame, 2> frames;

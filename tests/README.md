@@ -26,6 +26,10 @@ coordinator's protected state.
 ## Coordinator coverage
 
 - Boot requires a fresh baseline; reflecting received state creates no commands.
+- Matching controller or lamp snapshots publish the first baseline after boot,
+  recovery, and discovery; matching active snapshots do not republish entities.
+- Fresh readback reconciles optimistic power and presence changes that the lamp
+  did not apply, without echoing commands.
 - Commands arriving during either polling transmission take precedence over its
   old reply, without inheriting a command cooldown from a polling completion.
 - Power-on sends settings before power. New intent during that batch waits for

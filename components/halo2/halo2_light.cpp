@@ -66,7 +66,7 @@ bool Halo2Light::transitioning() const {
 
 void Halo2::control_light() {
   if (!accepts_commands()) return;
-  auto requested = lamp_state_.requested();
+  auto requested = lamp_state_;
   light_->read_into(requested);
   request_state_(requested);
   publish_brightness_();
@@ -78,7 +78,7 @@ void Halo2::control_light() {
 void Halo2::control_brightness(Section section, float value) {
   if (!accepts_commands() || !std::isfinite(value) || value < MIN_BRIGHTNESS_PERCENT || value > MAX_BRIGHTNESS_PERCENT)
     return;
-  auto requested = lamp_state_.requested();
+  auto requested = lamp_state_;
   // The lamp applies brightness settings only to selected sections. Show
   // the stored level of an inactive section without inventing a new one.
   if (!requested.selected(section)) {
@@ -95,7 +95,7 @@ void Halo2::control_brightness(Section section, float value) {
 
 void Halo2::control_selection(size_t index) {
   if (!accepts_commands() || index > static_cast<size_t>(LampSelection::BOTH)) return;
-  auto requested = lamp_state_.requested();
+  auto requested = lamp_state_;
   if (light_->transitioning()) light_->read_into(requested, true);
   requested.selection = static_cast<LampSelection>(index);
   request_state_(requested);
@@ -103,15 +103,15 @@ void Halo2::control_selection(size_t index) {
 }
 
 void Halo2::publish_brightness_() {
-  const auto &state = lamp_state_.requested();
+  const auto &state = lamp_state_;
   for (auto section : {Section::FRONT, Section::BACK})
     brightness_numbers_[static_cast<size_t>(section)]->publish_state(state.brightness(section));
 }
 
 void Halo2::publish_light_() {
-  light_->publish(lamp_state_.requested());
+  light_->publish(lamp_state_);
   publish_brightness_();
-  section_select_->publish_state(static_cast<size_t>(lamp_state_.requested().selection));
+  section_select_->publish_state(static_cast<size_t>(lamp_state_.selection));
 }
 
 }  // namespace esphome::halo2

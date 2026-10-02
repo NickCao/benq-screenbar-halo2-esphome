@@ -33,6 +33,78 @@ static void boot_waits_for_fresh_state_and_does_not_echo_publications() {
   CHECK(f.chip.transmissions.size() == 2);
 }
 
+static void matching_snapshots_publish_only_when_establishing_a_baseline(bool controller) {
+  BridgeFixture f;
+  LampState state;
+  state.front_brightness = f.front_brightness.state.value();
+  state.back_brightness = f.back_brightness.state.value();
+  state.color_temperature = 4000;  // The restored master temperature in the fixture.
+  f.expect_state(state);
+  CHECK(!f.ultrasonic.state);
+
+  const auto receive_baseline = [&]() {
+    if (controller) {
+      f.receive(state);
+      CHECK(f.bridge.accepts_commands());
+      f.expect_state(state);
+    } else {
+      f.establish_baseline(state);
+    }
+  };
+  receive_baseline();
+  CHECK(f.ultrasonic.state == 0);
+  const size_t publications = f.ultrasonic.publication_count;
+
+  // Matching requests and fresh replies do not republish an active baseline.
+  f.receive(state);
+  f.readback(state);
+  CHECK(f.ultrasonic.publication_count == publications);
+
+  f.wait_until([&]() { return f.bridge.get_radio().idle() && f.chip.receiving; });
+  f.chip.fail();
+  f.wait_until([&]() { return !f.bridge.accepts_commands(); });
+  f.expect_state(state);  // Recovery retains displayed settings.
+  f.wait_until([&]() { return f.chip.reset_count == 2 && f.chip.receiving; });
+  CHECK(!f.bridge.accepts_commands());
+  receive_baseline();
+  CHECK(f.ultrasonic.publication_count == publications + 1);
+
+  f.bridge.start_discovery();
+  CHECK(!f.bridge.accepts_commands());
+  f.expect_state(state);
+  for (unsigned capture = 0; capture < 3; ++capture) f.discover(BridgeFixture::ADDRESS, state);
+  CHECK(f.bridge.accepts_commands());
+  f.expect_state(state);
+  CHECK(f.ultrasonic.publication_count == publications + 2);
+  f.readback(state);
+  CHECK(f.ultrasonic.publication_count == publications + 2);
+}
+
+static void fresh_readback_reconciles_commands_the_lamp_did_not_apply() {
+  BridgeFixture f;
+  auto actual = baseline();
+  actual.ultrasonic_enabled = true;
+  f.establish_baseline(actual);
+  f.master.make_call().set_state(false).perform();
+  f.bridge.control_ultrasonic(0);
+  auto requested = actual;
+  requested.power = false;
+  requested.ultrasonic_enabled = false;
+  f.expect_state(requested);
+  CHECK(f.ultrasonic.state == 0);
+  CHECK(f.next_tx(Command::POWER).packet().state == requested);
+  f.finish_command();
+  CHECK(f.next_tx(Command::SETTINGS).packet().state == requested);
+  f.finish_command();
+
+  f.readback(actual);
+  f.expect_state(actual);
+  CHECK(f.ultrasonic.state == 2);
+  const size_t transmissions = f.chip.transmissions.size();
+  f.advance(200);
+  CHECK(f.chip.transmissions.size() == transmissions);
+}
+
 static void a_command_during_status_tx_takes_priority_over_the_stale_reply(bool during_read) {
   BridgeFixture f;
   f.establish_baseline(baseline());
@@ -634,6 +706,9 @@ int main() {
     std::cout << "  Passed: " << name << '\n';
   };
   run("boot baseline and publication guards", boot_waits_for_fresh_state_and_does_not_echo_publications);
+  run("matching controller baseline", []() { matching_snapshots_publish_only_when_establishing_a_baseline(true); });
+  run("matching lamp baseline", []() { matching_snapshots_publish_only_when_establishing_a_baseline(false); });
+  run("fresh readback reconciles unapplied commands", fresh_readback_reconciles_commands_the_lamp_did_not_apply);
   run("command during refresh TX", []() { a_command_during_status_tx_takes_priority_over_the_stale_reply(false); });
   run("command during read TX", []() { a_command_during_status_tx_takes_priority_over_the_stale_reply(true); });
   run("batch completion and queued intent", new_intent_during_a_batch_waits_for_both_packets_and_the_cooldown);
