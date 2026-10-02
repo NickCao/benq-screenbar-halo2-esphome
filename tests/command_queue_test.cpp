@@ -13,8 +13,9 @@ static void expect_batch(const std::optional<CommandQueue::Batch> &batch, std::i
 static void power_on_consumes_settings_but_preserves_the_timeout_command() {
   CommandQueue queue;
   LampState before, after = before;
-  after.set_light(Section::FRONT, true, 37);
-  after.set_light(Section::BACK, true, 62);
+  after.power = true;
+  after.front_brightness = 37;
+  after.back_brightness = 62;
   after.ultrasonic_timeout = UltrasonicTimeout::MINUTES_10;
   queue.request(before, after);
   expect_batch(queue.take(after, 0), {Command::SETTINGS, Command::POWER});

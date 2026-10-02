@@ -33,7 +33,7 @@ static void restored_settings_require_received_state() {
   CHECK(!model.initialized());
 
   auto local = saved;
-  local.set_light(Section::FRONT, true, 55);
+  local.set_brightness(Section::FRONT, 55);
   model.request(local);
   CHECK(!model.initialized());
 
@@ -51,7 +51,7 @@ static void controller_snapshots_replace_local_requests() {
   CHECK(model.receive_status(confirmed));
 
   auto local = confirmed;
-  local.set_light(Section::FRONT, false, 0);
+  local.selection = LampSelection::BACK_ONLY;
   model.request(local);
   CHECK(model.requested().selection == LampSelection::BACK_ONLY);
   CHECK(model.requested() == local);
@@ -91,95 +91,59 @@ static void lamp_readback_reconciles_a_failed_request() {
   CHECK(!model.receive_status(actual));
 }
 
-static void zero_brightness_preserves_levels_and_selection() {
-  auto state = initial_state();
-  state.set_light(Section::FRONT, true, 0);
-  CHECK(!state.is_on(Section::FRONT));
-  CHECK(state.is_on(Section::BACK));
-  CHECK(state.front_brightness == 40);
-  CHECK(state.back_brightness == 70);
-
-  state.set_light(Section::BACK, false, 0);
-  CHECK(!state.power);
-  CHECK(state.selection == LampSelection::BACK_ONLY);
-  CHECK(state.back_brightness == 70);
-  state.set_selection(false, false);
-  CHECK(state.selection == LampSelection::BACK_ONLY);
-
-  state.set_light(Section::FRONT, true, state.brightness(Section::FRONT));
-  CHECK(state.power);
-  CHECK(state.selection == LampSelection::FRONT_ONLY);
-  CHECK(state.front_brightness == 40);
-  CHECK(state.back_brightness == 70);
-}
-
-static void inactive_brightness_intent_survives_readback_until_the_next_on() {
-  for (auto section : {Section::FRONT, Section::BACK}) {
-    LampStateModel model;
-    const auto baseline = initial_state();
-    model.receive_status(baseline);
-    auto requested = baseline;
-    requested.set_light(section, false, baseline.brightness(section));
-    model.request(requested);
-    auto actual = requested;
-    actual.set_brightness(section, 1);  // Last transmitted fade sample.
-    CHECK(!model.receive_status(actual));
-    CHECK(model.requested() == requested);
-
-    requested.set_light(section, true, requested.brightness(section));
-    model.request(requested);
-    actual = requested;
-    actual.set_brightness(section, 10);  // A selected section must reconcile.
-    CHECK(model.receive_status(actual));
-    CHECK(model.requested() == actual);
-
-    actual.set_light(section, false, 25);
-    CHECK(model.receive_request(actual));  // Trust the controller snapshot.
-    CHECK(model.requested() == actual);
-    model.invalidate();
-    actual.set_brightness(section, 30);
-    CHECK(model.receive_status(actual));  // Recovery establishes a fresh baseline.
-    CHECK(model.requested() == actual);
+static void settings_are_independent_of_power_and_selection() {
+  for (auto selection : {LampSelection::FRONT_ONLY, LampSelection::BACK_ONLY, LampSelection::BOTH}) {
+    for (bool power : {false, true}) {
+      auto state = initial_state();
+      state.selection = selection;
+      state.power = power;
+      state.set_brightness(Section::FRONT, 55);
+      state.set_brightness(Section::BACK, 25);
+      CHECK(state.selection == selection);
+      CHECK(state.power == power);
+      CHECK(state.front_brightness == 55 && state.back_brightness == 25);
+      state.set_brightness(Section::FRONT, 0);
+      CHECK(state.front_brightness == 55);
+      state.set_selection(false, false);
+      CHECK(state.selection == selection);
+      state.selection = LampSelection::BOTH;
+      CHECK(state.front_brightness == 55 && state.back_brightness == 25);
+      CHECK(state.power == power);
+    }
   }
 }
 
-static void grouped_commands_work_in_either_order() {
-  for (auto selection : {LampSelection::FRONT_ONLY, LampSelection::BACK_ONLY, LampSelection::BOTH}) {
-    for (bool power : {false, true}) {
-      for (auto first : {Section::FRONT, Section::BACK}) {
-        const auto second = first == Section::FRONT ? Section::BACK : Section::FRONT;
-        auto state = initial_state();
-        state.selection = selection;
-        state.power = power;
-
-        state.set_light(first, true, state.brightness(first));
-        state.set_light(second, true, state.brightness(second));
-        CHECK(state.is_on(Section::FRONT));
-        CHECK(state.is_on(Section::BACK));
-        CHECK(state.selection == LampSelection::BOTH);
-
-        state.set_light(first, false, state.brightness(first));
-        CHECK(!state.is_on(first));
-        CHECK(state.is_on(second));
-        const auto last_selection = state.selection;
-        state.set_light(second, false, state.brightness(second));
-        CHECK(!state.power);
-        CHECK(state.selection == last_selection);
-        CHECK(state.front_brightness == 40);
-        CHECK(state.back_brightness == 70);
-      }
-    }
+static void fresh_readback_reconciles_inactive_stored_brightness() {
+  for (auto section : {Section::FRONT, Section::BACK}) {
+    LampStateModel model;
+    auto actual = initial_state();
+    actual.selection = section == Section::FRONT ? LampSelection::BACK_ONLY : LampSelection::FRONT_ONLY;
+    model.receive_status(actual);
+    auto requested = actual;
+    requested.set_brightness(section, 80);
+    model.request(requested);
+    actual.set_brightness(section, 1);
+    CHECK(model.receive_status(actual));
+    CHECK(model.requested() == actual);
+    CHECK(!model.receive_status(actual));
+    actual.set_brightness(section, 25);
+    CHECK(model.receive_request(actual));
+    CHECK(model.requested() == actual);
+    model.invalidate();
+    actual.set_brightness(section, 30);
+    CHECK(model.receive_status(actual));
+    CHECK(model.requested() == actual);
   }
 }
 
 static void brightness_changes_preserve_the_other_section() {
   auto state = initial_state();
   state.selection = LampSelection::FRONT_ONLY;
-  state.set_light(Section::FRONT, true, 255);
+  state.set_brightness(Section::FRONT, 255);
   CHECK(state.front_brightness == 100);
   CHECK(state.back_brightness == 70);
   CHECK(!state.is_on(Section::BACK));
-  state.set_light(Section::FRONT, true, 1);
+  state.set_brightness(Section::FRONT, 1);
   CHECK(state.front_brightness == 1);
   CHECK(state.back_brightness == 70);
 }
@@ -206,15 +170,69 @@ static void recovery_retains_requests_but_requires_a_new_baseline() {
   CHECK(model.requested() == local);
 }
 
+static void master_dimming_preserves_the_profile_and_inactive_levels() {
+  for (auto selection : {LampSelection::FRONT_ONLY, LampSelection::BACK_ONLY, LampSelection::BOTH}) {
+    for (bool power : {false, true}) {
+      auto basis = initial_state();
+      basis.selection = selection;
+      basis.power = power;
+      CHECK(basis.master_brightness() == (selection == LampSelection::FRONT_ONLY ? 40 : 70));
+      auto state = basis;
+      state.set_master_brightness(0, basis);
+      CHECK(state == basis);
+      state.set_master_brightness(35, basis);
+      CHECK(state.master_brightness() == 35);
+      CHECK(state.power == power);
+      CHECK(state.selection == selection);
+      CHECK(state.front_brightness == (selection == LampSelection::BACK_ONLY ? 40 :
+                                        selection == LampSelection::BOTH ? 20 : 35));
+      CHECK(state.back_brightness == (selection == LampSelection::FRONT_ONLY ? 70 : 35));
+      // A fade always scales against its original profile, avoiding drift
+      // from repeatedly rounding the preceding sample.
+      state.set_master_brightness(1, basis);
+      CHECK(state.master_brightness() == 1);
+      state.set_master_brightness(basis.master_brightness(), basis);
+      CHECK(state == basis);
+      state.set_master_brightness(255, basis);
+      CHECK(state.master_brightness() == 100);
+    }
+  }
+}
+
+static void dimming_handles_minimum_levels_and_rounding() {
+  for (auto selection : {LampSelection::FRONT_ONLY, LampSelection::BACK_ONLY, LampSelection::BOTH}) {
+    for (uint8_t front : {1, 2, 37, 99, 100}) {
+      for (uint8_t back : {1, 2, 62, 99, 100}) {
+        auto basis = initial_state();
+        basis.selection = selection;
+        basis.front_brightness = front;
+        basis.back_brightness = back;
+        auto state = basis;
+        for (uint8_t percent : {100, 50, 2, 1}) {
+          state.set_master_brightness(percent, basis);
+          CHECK(state.master_brightness() == percent);
+          CHECK(state.front_brightness >= 1 && state.front_brightness <= 100);
+          CHECK(state.back_brightness >= 1 && state.back_brightness <= 100);
+          if (!state.selected(Section::FRONT)) CHECK(state.front_brightness == front);
+          if (!state.selected(Section::BACK)) CHECK(state.back_brightness == back);
+          CHECK(state.power == basis.power);
+          CHECK(state.selection == basis.selection);
+        }
+      }
+    }
+  }
+}
+
 int main() {
   restored_settings_require_received_state();
   controller_snapshots_replace_local_requests();
   matching_status_only_republishes_when_establishing_a_baseline();
   lamp_readback_reconciles_a_failed_request();
-  zero_brightness_preserves_levels_and_selection();
-  inactive_brightness_intent_survives_readback_until_the_next_on();
-  grouped_commands_work_in_either_order();
+  settings_are_independent_of_power_and_selection();
+  fresh_readback_reconciles_inactive_stored_brightness();
   brightness_changes_preserve_the_other_section();
   recovery_retains_requests_but_requires_a_new_baseline();
+  master_dimming_preserves_the_profile_and_inactive_levels();
+  dimming_handles_minimum_levels_and_rounding();
   std::cout << "Lamp state tests passed\n";
 }

@@ -36,12 +36,14 @@ class BridgeFixture {
     radio.set_busy_pin(&busy);
     radio.set_irq_pin(&irq);
     bridge.set_ultrasonic_select(&ultrasonic);
+    bridge.set_section_select(&sections);
+    bridge.set_brightness_number(&front_brightness, Section::FRONT);
+    bridge.set_brightness_number(&back_brightness, Section::BACK);
     bridge.set_radio_status(&status);
     bridge.set_radio_address_sensor(&address);
     bridge.set_auto_discover(discover);
     if (!discover) bridge.set_radio_address(link);
-    front.setup();
-    back.setup();
+    master.setup();
     bridge.setup();
     wait_until([&]() { return chip.receiving && radio.ready(); });
   }
@@ -50,8 +52,7 @@ class BridgeFixture {
     time_us += 1000;
     chip.tick();
     bridge.run_timeouts();
-    front.loop();
-    back.loop();
+    master.loop();
     bridge.loop();
   }
   void advance(uint32_t ms) {
@@ -117,7 +118,7 @@ class BridgeFixture {
     CHECK(!bridge.accepts_commands());
     reply(state);
     wait_until([&]() { return bridge.accepts_commands(); });
-    expect_lights(state);
+    expect_state(state);
   }
   void readback(const LampState &state) {
     next_tx(Command::STATUS);
@@ -128,14 +129,13 @@ class BridgeFixture {
     wait_until([&]() { return bridge.get_radio().rx_count() > count; });
     CHECK(status.state == "Lamp status received");
   }
-  void expect_lights(const LampState &state) const {
-    const auto check_light = [&](const esphome::light::LightState &light, Section section) {
-      CHECK(light.remote_values.is_on() == state.is_on(section));
-      CHECK(std::abs(light.remote_values.get_brightness() - state.brightness(section) / 100.0f) < 0.0001f);
-      CHECK(std::abs(light.remote_values.get_color_temperature() - 1000000.0f / state.color_temperature) < 0.001f);
-    };
-    check_light(front, Section::FRONT);
-    check_light(back, Section::BACK);
+  void expect_state(const LampState &state) const {
+    CHECK(master.remote_values.is_on() == state.power);
+    CHECK(std::abs(master.remote_values.get_brightness() - state.master_brightness() / 100.0f) < 0.0001f);
+    CHECK(std::abs(master.remote_values.get_color_temperature() - 1000000.0f / state.color_temperature) < 0.001f);
+    CHECK(front_brightness.state == state.brightness(Section::FRONT));
+    CHECK(back_brightness.state == state.brightness(Section::BACK));
+    CHECK(sections.state == static_cast<size_t>(state.selection));
   }
   size_t status_count(std::string_view message) const {
     return std::count_if(status.history.begin(), status.history.end(),
@@ -145,9 +145,11 @@ class BridgeFixture {
   FakeLR1121 chip;
   esphome::InternalGPIOPin reset, busy, irq;
   Halo2 bridge;
-  Halo2Light front_output{&bridge, Section::FRONT}, back_output{&bridge, Section::BACK};
-  esphome::light::LightState front{&front_output}, back{&back_output};
+  Halo2Light master_output{&bridge};
+  esphome::light::LightState master{&master_output};
+  Halo2BrightnessNumber front_brightness{&bridge, Section::FRONT}, back_brightness{&bridge, Section::BACK};
   Halo2UltrasonicSelect ultrasonic{&bridge};
+  Halo2SectionSelect sections{&bridge};
   esphome::text_sensor::TextSensor status, address;
 };
 }  // namespace halo2_test

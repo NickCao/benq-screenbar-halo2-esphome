@@ -28,20 +28,25 @@ ota:
 
 halo2:
   id: screenbar
-  front_light:
-    id: front_lamp
-    name: "Front lamp"
+  light:
+    id: master_lamp
+    name: "ScreenBar"
     icon: mdi:desk-lamp
-    initial_state:
-      brightness: 12%
-      color_temperature: 3925 K
-  back_light:
-    id: back_lamp
-    name: "Back lamp"
-    icon: mdi:wall-sconce-flat-outline
     initial_state:
       brightness: 91%
       color_temperature: 3925 K
+  front_brightness:
+    id: front_brightness
+    name: "Front brightness"
+    initial_value: 12
+  back_brightness:
+    id: back_brightness
+    name: "Back brightness"
+    icon: mdi:wall-sconce-flat-outline
+    initial_value: 91
+  sections:
+    id: lamp_sections
+    name: "Lighting mode"
   ultrasonic:
     id: ultrasonic_sensor
     name: "Ultrasonic sensor"

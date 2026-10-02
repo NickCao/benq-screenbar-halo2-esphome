@@ -12,6 +12,7 @@ template<typename... Args> void log(Args &&...) {}
 #define ESP_LOGCONFIG(...) ::halo2_test::log(__VA_ARGS__)
 #define LOG_UPDATE_INTERVAL(...) ::halo2_test::log(__VA_ARGS__)
 #define LOG_SELECT(...) ::halo2_test::log(__VA_ARGS__)
+#define LOG_NUMBER(...) ::halo2_test::log(__VA_ARGS__)
 #define LOG_SPI_DEVICE(...) ::halo2_test::log(TAG, __VA_ARGS__)
 #define LOG_PIN(...) ::halo2_test::log(__VA_ARGS__)
 #define ONOFF(value) ((value) ? "ON" : "OFF")

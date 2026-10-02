@@ -45,8 +45,17 @@ coordinator's protected state.
   only a fresh status reply publishes lamp state.
 - Wrong-PID replies and queued non-status replies cannot publish lamp state.
 - Polling waits for transitions, including the interval before the first sample.
-- Temperature rounding preserves a peer fade; a changed shared temperature
-  reconciles the peer's final brightness and on/off target.
+- Master OFF, immediate or faded, retains selection, both brightness levels,
+  and presence settings; a fresh presence wake observation creates no ON command.
+- Master brightness scales selected sections against the current profile;
+  incoming controller changes establish the next dimming reference.
+- Lighting mode is independent of power. Both number settings show stored
+  levels, including inactive values, and fresh readback reconciles both fields.
+- Inactive section edits are ignored until the section is selected; settings
+  while globally OFF preserve power.
+- Dimming samples share one original ratio, avoiding rounding drift. Settings
+  finish a master fade at its target, and a temperature call preserves the ratio.
+- Zero master brightness retains the profile for a following plain ON.
 - Deferred writes capture the final transition target installed after
   update_state().
 

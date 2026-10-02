@@ -26,47 +26,36 @@ light::LightTraits Halo2Light::get_traits() {
 
 void Halo2Light::restore_into(LampState &state) const {
   const auto &values = state_->remote_values;
-  state.set_light(section_, values.is_on(), brightness_percent(values.get_brightness()));
-  if (section_ == Section::FRONT) state.color_temperature = temperature_kelvin(values.get_color_temperature());
+  state.power = values.is_on();
+  state.color_temperature = temperature_kelvin(values.get_color_temperature());
 }
 
-void Halo2Light::read_into(LampState &state) const {
+void Halo2Light::read_into(LampState &state, bool use_target) const {
+  const auto &target = state_->remote_values;
   float temperature = 0, brightness = 0;
   state_->current_values_as_ct(&temperature, &brightness);
   const auto traits = state_->get_traits();
-  const float mireds = std::lerp(traits.get_min_mireds(), traits.get_max_mireds(), temperature);
-  // The final fade-out sample has zero brightness. Retain the remote level
-  // for OFF, and let LampState preserve it when the remote level is also zero.
-  const bool on = brightness > 0;
-  if (!on) brightness = state_->remote_values.get_brightness();
-  state.set_light(section_, on, brightness_percent(brightness));
+  const float mireds = use_target ? target.get_color_temperature()
+                                : std::lerp(traits.get_min_mireds(), traits.get_max_mireds(), temperature);
+  if (use_target) brightness = target.is_on() ? target.get_brightness() : 0;
+  state.power = brightness > 0;
+  // Never turn OFF fade samples into stored brightness settings. POWER is
+  // independent of the selection and the levels used on the next wake.
+  if (target.is_on() && brightness > 0)
+    state.set_master_brightness(std::max(brightness_percent(brightness), MIN_BRIGHTNESS_PERCENT), dimming_basis_);
   state.color_temperature = temperature_kelvin(mireds);
 }
 
 void Halo2Light::publish(const LampState &state) {
   ScopedPublication guard(reflecting_state_);
   auto call = state_->make_call();
-  call.set_state(state.is_on(section_));
-  call.set_brightness(state.brightness(section_) / 100.0f);
+  call.set_state(state.power);
+  call.set_brightness(state.master_brightness() / 100.0f);
   call.set_color_temperature(1000000.0f / state.color_temperature);
   call.set_transition_length(0);
   call.set_effect("None");
   call.perform();
-}
-
-bool Halo2Light::needs_temperature_sync(uint16_t temperature) const {
-  const float mireds = 1000000.0f / temperature;
-  return state_->current_values.get_color_temperature() != mireds ||
-         state_->remote_values.get_color_temperature() != mireds;
-}
-
-void Halo2Light::sync_temperature(uint16_t temperature) {
-  if (!needs_temperature_sync(temperature)) return;
-  ScopedPublication guard(reflecting_state_);
-  auto call = state_->make_call();
-  call.set_color_temperature(1000000.0f / temperature);
-  call.set_transition_length(0);
-  call.perform();
+  dimming_basis_ = state;
 }
 
 bool Halo2Light::transitioning() const {
@@ -79,34 +68,52 @@ void Halo2::control_light(Halo2Light &source) {
   if (!accepts_commands()) return;
   auto requested = lamp_state_.requested();
   source.read_into(requested);
-  const auto temperature = requested.color_temperature;
-  Halo2Light *peer = nullptr;
-  if (temperature != lamp_state_.requested().color_temperature) {
-    peer = lights_[source.section_ == Section::FRONT ? 1 : 0];
-    if (peer->needs_temperature_sync(temperature)) {
-      // An immediate temperature call finishes a peer fade at its remote
-      // target. Include that target before publishing either entity.
-      const auto &target = peer->state_->remote_values;
-      requested.set_light(peer->section_, target.is_on(), brightness_percent(target.get_brightness()));
-    } else {
-      peer->read_into(requested);
-    }
-  }
   request_state_(requested);
-  if (peer != nullptr) peer->sync_temperature(temperature);
-  if (source.transitioning()) return;
-  // Repair zero-brightness OFF immediately so a following plain ON uses the
-  // retained level. Otherwise only canonicalize the source's temperature.
-  if (source.state_->remote_values.get_brightness() == 0)
-    source.publish(requested);
-  else
-    source.sync_temperature(temperature);
+  publish_brightness_();
+  // Canonicalize integer brightness/25 K temperature, and repair a zero
+  // brightness OFF so plain ON can restore the retained profile.
+  if (!source.transitioning()) source.publish(requested);
 }
 
-bool Halo2::lights_transitioning_() const { return lights_[0]->transitioning() || lights_[1]->transitioning(); }
+void Halo2::control_brightness(Section section, float value) {
+  if (!accepts_commands() || !std::isfinite(value) || value < MIN_BRIGHTNESS_PERCENT || value > MAX_BRIGHTNESS_PERCENT)
+    return;
+  auto requested = lamp_state_.requested();
+  // The lamp applies brightness settings only to selected sections. Show
+  // the stored level of an inactive section without inventing a new one.
+  if (!requested.selected(section)) {
+    publish_brightness_();
+    return;
+  }
+  // A setting change ends any active master fade at its final target,
+  // before changing the profile used for subsequent proportional dimming.
+  if (light_->transitioning()) light_->read_into(requested, true);
+  requested.set_brightness(section, static_cast<uint8_t>(std::lround(value)));
+  request_state_(requested);
+  publish_light_();
+}
 
-void Halo2::publish_lights_() {
-  for (auto *light : lights_) light->publish(lamp_state_.requested());
+void Halo2::control_selection(size_t index) {
+  if (!accepts_commands() || index > static_cast<size_t>(LampSelection::BOTH)) return;
+  auto requested = lamp_state_.requested();
+  if (light_->transitioning()) light_->read_into(requested, true);
+  requested.selection = static_cast<LampSelection>(index);
+  request_state_(requested);
+  publish_light_();
+}
+
+bool Halo2::light_transitioning_() const { return light_->transitioning(); }
+
+void Halo2::publish_brightness_() {
+  const auto &state = lamp_state_.requested();
+  for (auto section : {Section::FRONT, Section::BACK})
+    brightness_numbers_[static_cast<size_t>(section)]->publish_state(state.brightness(section));
+}
+
+void Halo2::publish_light_() {
+  light_->publish(lamp_state_.requested());
+  publish_brightness_();
+  section_select_->publish_state(static_cast<size_t>(lamp_state_.requested().selection));
 }
 
 }  // namespace esphome::halo2

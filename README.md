@@ -2,7 +2,7 @@
 
 [![Validate](https://github.com/Termina1/benq-screenbar-halo2-esphome/actions/workflows/validate.yml/badge.svg)](https://github.com/Termina1/benq-screenbar-halo2-esphome/actions/workflows/validate.yml)
 
-Control a **BenQ ScreenBar HALO 2** through Home Assistant's encrypted ESPHome native API. The bridge exposes **Front lamp** and **Back lamp** as lights with separate power and brightness controls and a shared color temperature. It also supports Auto brightness, ultrasonic presence mode, and commands from the original controller. The bridge polls the lamp to keep HA updated after automatic changes.
+Control a **BenQ ScreenBar HALO 2** through Home Assistant's encrypted ESPHome native API. The bridge exposes one **ScreenBar** light for global power, shared color temperature, and proportional dimming, plus a **Lighting mode** selector and separate **Front brightness** / **Back brightness** settings. It also supports Auto brightness, ultrasonic presence mode, and commands from the original controller. The bridge polls the lamp to keep HA updated after automatic changes.
 
 The supported hardware is the **Waveshare ESP32-S3-LR1121-HF**, using its onboard radio at 2.4 GHz in GFSK mode.
 
@@ -62,8 +62,9 @@ The saved link is reused after reboot. Use **Discover lamp address** to learn an
 
 | Entity | Behavior |
 |---|---|
-| Front lamp | Front on/off, brightness, and shared color temperature |
-| Back lamp | Back on/off, brightness, and shared color temperature |
+| ScreenBar | Global on/off, shared color temperature, and proportional brightness control |
+| Lighting mode | Select Front, Back, or Both independently of global power |
+| Front brightness / Back brightness | Stored section brightness, 1–100%; select a section before changing its level |
 | Auto brightness | Activates the lamp's automatic brightness adjustment |
 | Ultrasonic sensor | Select Disabled, or enable presence detection with a 3-, 5-, 10-, or 15-minute inactivity timeout; it does not report occupancy |
 | Radio status | Initialization, discovery, controller reception, lamp polling, and command/error status |
@@ -72,13 +73,13 @@ The saved link is reused after reboot. Use **Discover lamp address** to learn an
 | Resend current state | Reapplies the bridge's current settings and power state |
 | Restart | Restarts the bridge |
 
-There is no separate master Power entity. Turning off the last active section sends the lamp's global OFF command; turning either section on from fully off applies the settings and sends global ON.
+Turning **ScreenBar** off sends global OFF while preserving the selected mode, both brightness values, and presence settings for the next wake. Turning it on applies the retained settings before global ON. Section selection and brightness settings can be changed while globally off; they keep the lamp off.
 
 The first command is sent without a debounce delay. For one second after a command batch finishes, further changes are combined into the latest requested state. Each required power, settings, or timeout command is retained and sent in order. HA reflects requests immediately once the bridge has received its first valid lamp/controller state. Set `halo2.command_debounce` to adjust this interval.
 
-Brightness is independent for each section. Color temperature is shared between the two light entities, so changing it on either entity updates both. The bridge sends temperatures from 2700–6500 K in 25 K steps. An [unequal-temperature hardware test](docs/PROTOCOL.md#unequal-temperature-experiment-2026-09-29) found that both sections' visible color followed the first temperature field, while replies retained both fields. See the [protocol reference](docs/PROTOCOL.md#application-payload) for the field mapping and remaining questions, or the [BenQ user guide](https://www.benq.com/en-us/support/downloads-faq/products/lighting/screenbar-halo-2/manual.html) for controller operation.
+The master light reports the highest selected brightness and dims selected sections proportionally: front 30% / back 80% gives master 80%; setting master 40% produces 15% / 40%. Values are rounded to whole percentages with a 1% minimum. The section settings show stored brightness even when a section is unselected or global power is off. Controller updates and fresh lamp replies replace these settings directly. Color temperature belongs to the master light and applies to both sections. The bridge sends temperatures from 2700–6500 K in 25 K steps. An [unequal-temperature hardware test](docs/PROTOCOL.md#unequal-temperature-experiment-2026-09-29) found that both sections' visible color followed the first temperature field, while replies retained both fields. See the [protocol reference](docs/PROTOCOL.md#application-payload) for the field mapping and remaining questions, or the [BenQ user guide](https://www.benq.com/en-us/support/downloads-faq/products/lighting/screenbar-halo-2/manual.html) for controller operation.
 
-HA's normal “all lights” controls operate both sections. For one dedicated ScreenBar control, optionally create an HA **Light group** containing Front lamp and Back lamp. Its default state is on if either member is on; group ON turns both sections on. The group is configured in HA, not created by this firmware. [HA light groups](https://www.home-assistant.io/integrations/group/)
+HA's native light controls operate **ScreenBar** directly. The ordinary brightness action turns the master on; the two number settings adjust levels without changing power. No Light group helper is needed. [HA light controls](https://www.home-assistant.io/integrations/light/)
 
 [`home-assistant/dashboard.yaml`](home-assistant/dashboard.yaml) provides an optional native-entity dashboard. Adapt its entity IDs if you renamed the device or entities. See [dashboard setup](docs/CONFIGURATION.md#optional-dashboard).
 
@@ -88,7 +89,7 @@ HA commands update the bridge's state optimistically. CRC-valid requests heard f
 
 The **bridge queries the lamp every five seconds**, so presence-triggered on/off, Auto brightness adjustments, and missed controller changes are reflected in HA after the next successful poll. Each cycle refreshes the lamp's queued status, waits half a second, and reads it back. The first reply can contain old state and is discarded, preventing it from undoing a recent HA command. Local commands trigger an earlier refresh.
 
-After three failed polling cycles, **Radio status** reports that lamp status is unavailable; the lights retain their last known state. A successful reply restores synchronization. **Command sent** means local radio transmission completed; **Lamp status received** indicates an actual status reply. See [polling configuration](docs/CONFIGURATION.md#component-options).
+After three failed polling cycles, **Radio status** reports that lamp status is unavailable; the entities retain their last known state. A successful reply restores synchronization. **Command sent** means local radio transmission completed; **Lamp status received** indicates an actual status reply. See [polling configuration](docs/CONFIGURATION.md#component-options).
 
 LR1121 hardware errors trigger automatic radio reinitialization, with retries from one to thirty seconds apart. Wi-Fi and the native API remain running. Recovery restores the radio link and reads the lamp's state without replaying interrupted commands.
 
@@ -153,7 +154,7 @@ These tests change light power, brightness, temperature, and ultrasonic settings
 
 ## Project notes
 
-Radio interoperability research was informed by public BM5602 examples and [kuzmin-no/BenQ_ScreenBar_HALO_2_HA_integration](https://github.com/kuzmin-no/BenQ_ScreenBar_HALO_2_HA_integration). For M5Stack ATOM Lite + BM5602 support, use that original project. This repository provides native ESPHome lights for the Waveshare LR1121 board.
+Radio interoperability research was informed by public BM5602 examples and [kuzmin-no/BenQ_ScreenBar_HALO_2_HA_integration](https://github.com/kuzmin-no/BenQ_ScreenBar_HALO_2_HA_integration). For M5Stack ATOM Lite + BM5602 support, use that original project. This repository provides native ESPHome controls for the Waveshare LR1121 board.
 
 This is an unofficial community project, not affiliated with or endorsed by BenQ. BenQ and ScreenBar are trademarks of their respective owner.
 

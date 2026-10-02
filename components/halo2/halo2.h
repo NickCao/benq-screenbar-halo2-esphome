@@ -6,6 +6,7 @@
 #include "esphome/core/preferences.h"
 #include "esphome/components/button/button.h"
 #include "esphome/components/light/light_output.h"
+#include "esphome/components/number/number.h"
 #include "esphome/components/select/select.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "bridge_state.h"
@@ -28,8 +29,15 @@ class Halo2 : public PollingComponent {
   LR1121Radio &get_radio() { return radio_; }
   void set_frequency_deviation(uint32_t value) { frequency_deviation_ = value; }
   void set_pulse_shape(uint8_t value) { pulse_shape_ = value; }
-  void set_light(Halo2Light *value, Section section) { lights_[static_cast<size_t>(section)] = value; }
+  void set_light(Halo2Light *value) { light_ = value; }
+  void set_brightness_number(number::Number *value, Section section) {
+    brightness_numbers_[static_cast<size_t>(section)] = value;
+  }
+  void set_initial_brightness(Section section, uint8_t value) {
+    initial_brightness_[static_cast<size_t>(section)] = value;
+  }
   void set_ultrasonic_select(select::Select *value) { ultrasonic_select_ = value; }
+  void set_section_select(select::Select *value) { section_select_ = value; }
   void set_radio_status(text_sensor::TextSensor *value) { radio_status_ = value; }
   void set_radio_address_sensor(text_sensor::TextSensor *value) { radio_address_sensor_ = value; }
   void set_auto_discover(bool value) { auto_discover_ = value; }
@@ -45,6 +53,8 @@ class Halo2 : public PollingComponent {
 
   bool accepts_commands() const { return lifecycle_.active(); }
   void control_light(Halo2Light &source);
+  void control_brightness(Section section, float value);
+  void control_selection(size_t index);
   void control_ultrasonic(size_t index);
   void resend() {
     if (accepts_commands()) commands_.resend();
@@ -57,8 +67,9 @@ class Halo2 : public PollingComponent {
   static constexpr uint32_t RECOVERY_INITIAL_DELAY_MS = 1000;
 
   void request_state_(const LampState &requested);
-  bool lights_transitioning_() const;
-  void publish_lights_();
+  bool light_transitioning_() const;
+  void publish_light_();
+  void publish_brightness_();
   void publish_ultrasonic_();
   void publish_status_(const char *status);
   void save_mode_();
@@ -92,7 +103,10 @@ class Halo2 : public PollingComponent {
     uint8_t count{0};
   };
 
-  std::array<Halo2Light *, 2> lights_{};
+  Halo2Light *light_{nullptr};
+  std::array<number::Number *, 2> brightness_numbers_{};
+  std::array<uint8_t, 2> initial_brightness_{12, 91};
+  select::Select *section_select_{nullptr};
   select::Select *ultrasonic_select_{nullptr};
   text_sensor::TextSensor *radio_status_{nullptr};
   text_sensor::TextSensor *radio_address_sensor_{nullptr};
@@ -124,11 +138,11 @@ class Halo2 : public PollingComponent {
 
 class Halo2Light : public light::LightOutput, public Parented<Halo2> {
  public:
-  Halo2Light(Halo2 *parent, Section section) : Parented<Halo2>(parent), section_(section) {}
+  using Parented<Halo2>::Parented;
   light::LightTraits get_traits() override;
   void setup_state(light::LightState *state) override {
     state_ = state;
-    parent_->set_light(this, section_);
+    parent_->set_light(this);
   }
   void update_state(light::LightState *) override {
     // Capture local commands immediately, before polling can receive a packet.
@@ -146,16 +160,25 @@ class Halo2Light : public light::LightOutput, public Parented<Halo2> {
  protected:
   friend class Halo2;
   void restore_into(LampState &state) const;
-  void read_into(LampState &state) const;
+  void read_into(LampState &state, bool use_target = false) const;
   void publish(const LampState &state);
-  bool needs_temperature_sync(uint16_t temperature) const;
-  void sync_temperature(uint16_t temperature);
   bool transitioning() const;
 
-  Section section_;
+  // Freeze the original ratio across a fade; integer samples must not
+  // become the basis of the following sample's proportional dimming.
+  LampState dimming_basis_;
   light::LightState *state_{nullptr};
   bool local_write_{false};
   bool reflecting_state_{false};
+};
+
+class Halo2BrightnessNumber : public number::Number, public Parented<Halo2> {
+ public:
+  Halo2BrightnessNumber(Halo2 *parent, Section section) : Parented<Halo2>(parent), section_(section) {}
+
+ protected:
+  void control(float value) override { parent_->control_brightness(section_, value); }
+  Section section_;
 };
 
 class Halo2UltrasonicSelect : public select::Select, public Parented<Halo2> {
@@ -164,6 +187,14 @@ class Halo2UltrasonicSelect : public select::Select, public Parented<Halo2> {
 
  protected:
   void control(size_t index) override { parent_->control_ultrasonic(index); }
+};
+
+class Halo2SectionSelect : public select::Select, public Parented<Halo2> {
+ public:
+  using Parented<Halo2>::Parented;
+
+ protected:
+  void control(size_t index) override { parent_->control_selection(index); }
 };
 
 class Halo2DiscoverButton : public button::Button, public Parented<Halo2> {

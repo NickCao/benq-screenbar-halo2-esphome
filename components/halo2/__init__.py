@@ -1,7 +1,7 @@
 from esphome import pins
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import button, light, select, spi, text_sensor
+from esphome.components import button, light, number, select, spi, text_sensor
 from esphome.const import (
     CONF_BUSY_PIN,
     CONF_DATA_RATE,
@@ -15,14 +15,16 @@ from esphome.const import (
     ENTITY_CATEGORY_DIAGNOSTIC,
 )
 
-AUTO_LOAD = ["button", "light", "select", "text_sensor"]
+AUTO_LOAD = ["button", "light", "number", "select", "text_sensor"]
 DEPENDENCIES = ["esp32", "spi"]
 
 halo2_ns = cg.esphome_ns.namespace("halo2")
 Halo2 = halo2_ns.class_("Halo2", cg.PollingComponent)
 Halo2Light = halo2_ns.class_("Halo2Light", light.LightOutput)
+Halo2BrightnessNumber = halo2_ns.class_("Halo2BrightnessNumber", number.Number)
 Section = halo2_ns.enum("Section", is_class=True)
 Halo2UltrasonicSelect = halo2_ns.class_("Halo2UltrasonicSelect", select.Select)
+Halo2SectionSelect = halo2_ns.class_("Halo2SectionSelect", select.Select)
 Halo2DiscoverButton = halo2_ns.class_("Halo2DiscoverButton", button.Button)
 Halo2AutoButton = halo2_ns.class_("Halo2AutoButton", button.Button)
 
@@ -41,6 +43,15 @@ LIGHT_SCHEMA = light.light_schema(
         ): cv.positive_time_period_milliseconds,
     }
 )
+
+BRIGHTNESS_SCHEMA = number.number_schema(
+    Halo2BrightnessNumber,
+    icon="mdi:brightness-6",
+    unit_of_measurement="%",
+).extend({
+    cv.Optional("mode", default="SLIDER"): cv.enum(number.NUMBER_MODES, upper=True),
+    cv.Optional("initial_value", default=100): cv.int_range(min=1, max=100),
+})
 
 
 BASE_SCHEMA = cv.Schema(
@@ -72,8 +83,14 @@ BASE_SCHEMA = cv.Schema(
         cv.Optional("pulse_shape", default=0x09): cv.one_of(
             0x00, 0x08, 0x09, 0x0A, 0x0B, int=True
         ),
-        cv.Required("front_light"): LIGHT_SCHEMA,
-        cv.Required("back_light"): LIGHT_SCHEMA,
+        cv.Required("light"): LIGHT_SCHEMA,
+        cv.Required("front_brightness"): BRIGHTNESS_SCHEMA,
+        cv.Required("back_brightness"): BRIGHTNESS_SCHEMA,
+        cv.Required("sections"): select.select_schema(
+            Halo2SectionSelect,
+            entity_category=ENTITY_CATEGORY_CONFIG,
+            icon="mdi:lamps",
+        ),
         cv.Required("ultrasonic"): select.select_schema(
             Halo2UltrasonicSelect,
             entity_category=ENTITY_CATEGORY_CONFIG,
@@ -129,8 +146,15 @@ async def to_code(config):
         cg.add(var.set_radio_address(cg.ArrayInitializer(*config["radio_address"])))
     if "radio_channel" in config:
         cg.add(var.set_radio_channel(config["radio_channel"]))
-    await light.new_light(config["front_light"], var, Section.FRONT)
-    await light.new_light(config["back_light"], var, Section.BACK)
+    await light.new_light(config["light"], var)
+    for key, section in [("front_brightness", Section.FRONT), ("back_brightness", Section.BACK)]:
+        brightness = await number.new_number(
+            config[key], var, section, min_value=1, max_value=100, step=1,
+        )
+        cg.add(var.set_brightness_number(brightness, section))
+        cg.add(var.set_initial_brightness(section, config[key]["initial_value"]))
+    sections = await select.new_select(config["sections"], var, options=["Front", "Back", "Both"])
+    cg.add(var.set_section_select(sections))
     ultrasonic = await select.new_select(
         config["ultrasonic"], var,
         options=["Disabled", "3 minutes", "5 minutes", "10 minutes", "15 minutes"],

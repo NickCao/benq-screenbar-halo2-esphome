@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from time import monotonic
 
 from aioesphomeapi import APIClient
-from aioesphomeapi.model import ButtonInfo, LightInfo, LogLevel, SelectInfo
+from aioesphomeapi.model import ButtonInfo, LightInfo, LogLevel, NumberInfo, SelectInfo
 
 LOGGER = logging.getLogger(__name__)
 STATUS_PATTERN = re.compile(
@@ -85,6 +85,12 @@ class Lamp:
     def select(self, option):
         self.api.select_command(self.entity("Ultrasonic sensor", SelectInfo).key, option)
 
+    def sections(self, option):
+        self.api.select_command(self.entity("Lighting mode", SelectInfo).key, option)
+
+    def number(self, name, value):
+        self.api.number_command(self.entity(name, NumberInfo).key, value)
+
     def button(self, name):
         self.api.button_command(self.entity(name, ButtonInfo).key)
 
@@ -107,7 +113,13 @@ class Lamp:
         )
 
     async def wait_light_state(self, name, *, timeout=3, **expected):
-        key = self.entity(name, LightInfo).key
+        return await self.wait_entity_state(name, LightInfo, timeout=timeout, **expected)
+
+    async def wait_number_state(self, name, value, *, timeout=3):
+        return await self.wait_entity_state(name, NumberInfo, timeout=timeout, state=value)
+
+    async def wait_entity_state(self, name, kind, *, timeout=3, **expected):
+        key = self.entity(name, kind).key
         deadline = monotonic() + timeout
         while monotonic() < deadline:
             self.changed.clear()

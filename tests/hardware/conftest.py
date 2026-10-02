@@ -26,14 +26,20 @@ async def lamp(pytestconfig):
     try:
         await device.connect()
         await device.wait_readback(monotonic())
-        since = monotonic()
-        device.select("Disabled")
-        device.light("Front lamp", state=True, brightness=.37, color_temperature=1_000_000 / 4200)
-        device.light("Back lamp", state=True, brightness=.62)
-        await device.wait_readback(
-            since, power=True, front=True, back=True, front_brightness=37,
-            back_brightness=62, temperature=4200, ultrasonic=False,
-        )
         yield device
     finally:
         await device.disconnect()
+
+
+@pytest_asyncio.fixture(autouse=True, loop_scope="module")
+async def baseline_profile(lamp):
+    since = monotonic()
+    lamp.select("Disabled")
+    lamp.sections("Both")
+    lamp.light("ScreenBar", state=True, color_temperature=1_000_000 / 4500)
+    lamp.number("Front brightness", 37)
+    lamp.number("Back brightness", 62)
+    await lamp.wait_readback(
+        since, power=True, front=True, back=True, front_brightness=37,
+        back_brightness=62, temperature=4500, ultrasonic=False,
+    )

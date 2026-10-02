@@ -40,7 +40,9 @@ The schema is defined in [`components/halo2/__init__.py`](../components/halo2/__
 | `spi_id`, `cs_pin` | ESPHome SPI bus reference and required chip-select output pin. The bus must declare both MOSI and MISO. |
 | `reset_pin`, `busy_pin`, `irq_pin` | Required internal GPIO pins: reset output, BUSY input, and IRQ input |
 | `data_rate`, `spi_mode` | Fixed to the validated `1MHz` and `MODE0`, also used as defaults |
-| `front_light`, `back_light` | Required native light configurations; separate brightness and shared color temperature |
+| `light` | Required master light: global power, shared color temperature, and proportional dimming |
+| `sections` | Required select with Front, Back, and Both options |
+| `front_brightness`, `back_brightness` | Required numbers with range 1–100%, step 1, and SLIDER mode by default; optional `initial_value` defaults to 100 |
 | `ultrasonic` | Required select: Disabled, 3 minutes, 5 minutes, 10 minutes, or 15 minutes; a duration enables presence detection with that inactivity timeout |
 | `auto_button` | Optional button activating the lamp's automatic brightness adjustment; included in the common package |
 | `radio_status` | Required diagnostic text sensor |
@@ -74,13 +76,17 @@ The component currently supports one radio/bridge instance per device. LR1121 wi
 
 ## Light defaults and state
 
-Both lights use zero-length transitions by default and `gamma_correct: 1.0`; other gamma values are rejected because the lamp already accepts brightness percentages. Their restore mode is `RESTORE_DEFAULT_OFF`.
+The master light uses zero-length transitions by default and `gamma_correct: 1.0`; other gamma values are rejected because the lamp already accepts brightness percentages. Its restore mode is `RESTORE_DEFAULT_OFF`.
 
-The common package provides initial brightness values of 12% front / 91% back and a shared 3925 K temperature. These are initial defaults, not address-discovery requirements. Saved light preferences take precedence on later boots. Initialization restores the bridge's last known light state without sending settings or power commands. LR1121 then queries the lamp. Local controls are accepted after the first valid lamp/controller state, so an uninitialized presence setting cannot accidentally disable the sensor.
+The common package provides initial brightness values of 12% front / 91% back and a shared 3925 K temperature. Saved master power/temperature and lighting mode are restored at startup, with the configured section brightness defaults used until readback. Initialization sends no settings or power commands. LR1121 queries the lamp, and local controls are accepted after the first valid lamp/controller state. Both section levels and all other settings are then reconciled with received state.
 
-The bridge sends color temperatures from 2700–6500 K in 25 K steps. A change through either light is mirrored to the other. Brightness is 1–100% when lit; zero brightness is treated as off. Last useful brightness is retained when turning a section off.
+**Lighting mode** directly represents the lamp's Front, Back, or Both selection, independently of global power. **Front brightness** and **Back brightness** show the stored 1–100% levels, including while a section is unselected or the lamp is off. The lamp applies brightness changes only to selected sections: select a section before editing its level; an inactive section's slider returns to its stored value. Setting changes while globally off keep the lamp off.
 
-There is no `power:` option or master Power switch. The front/back light states determine global power and the selected lighting mode.
+The master brightness is the highest selected level. Its native brightness control scales selected sections proportionally; front 30% / back 80% gives master 80%, and changing master to 40% produces 15% / 40%. Unselected levels are retained. Outgoing percentages are rounded to integers with a 1% minimum; a selected section never becomes unselected through dimming. The native HA brightness action turns the master on. Controller changes and fresh lamp status establish the actual levels used for the next adjustment.
+
+Master OFF, including a zero master brightness request, retains the selection and both levels. Explicit OFF transitions defer power-off until completion and preserve the stored wake settings throughout; they do not send intermediate dimming levels. A subsequent plain ON restores the retained profile. BenQ documents a 30-second presence pause after manual power-off; the lamp owns that pause, and the bridge does not add a timer. [BenQ presence FAQ](https://www.benq.com/th-th/support/downloads-faq/faq/product/application/e-reading-lamp-faq-kn-00051.html)
+
+The master light owns shared color temperature, sent as 2700–6500 K in 25 K steps. Both payload temperature fields carry the same value. The section selector and brightness numbers finish an active master transition at its target before applying their setting, so the previous fade cannot overwrite the new profile.
 
 The **Ultrasonic sensor** dropdown combines sensor enable and inactivity timeout into one control. Disabled turns off presence detection while retaining the lamp's timeout; choosing 3, 5, 10, or 15 minutes enables detection with that duration. The timer runs in the lamp. Polling and accepted controller snapshots update the dropdown; it does not report occupancy. On the wire, timeout value zero means three minutes, and disabling uses a separate bit; see the [protocol reference](PROTOCOL.md#ultrasonic-timeout).
 
@@ -118,11 +124,11 @@ lovelace:
 
 Merge this into an existing `lovelace:` section if present. Adjust the dashboard entity IDs to the ones in your HA installation. There is no HA package or REST polling automation to copy.
 
-For a combined control, create a Light group helper containing Front lamp and Back lamp. Group ON enables both sections; it does not restore a previous front-only/back-only selection.
+Use the master ScreenBar light for HA light controls and automations. Its ON action retains the selected lighting mode; use Lighting mode to choose sections explicitly.
 
 ## Updating older installations
 
-Keep the device and light names to retain their HA identities. HA refreshes the native API entity list on reconnect. Remove manually configured dashboard cards or automations that reference the retired master Power switch or old REST helpers.
+HA refreshes the native API entity list on reconnect. The previous Front lamp and Back lamp entities are replaced by ScreenBar, Lighting mode, and the two brightness numbers. Update dashboard cards and automations to the new entities, remove the old Light group helper, and remove retired entities once HA marks them unavailable. In customized YAML, replace `front_light` / `back_light` with `light`, `sections`, `front_brightness`, and `back_brightness`, following the common package. Also remove references to the earlier master Power switch or REST helpers.
 
 The ultrasonic entity is now a select instead of a switch. Update dashboard and automation references from `switch.…_ultrasonic_sensor` to `select.…_ultrasonic_sensor`, using one of the five option names above. The previous switch may remain as an unavailable entity in HA and can be removed. Customized `ultrasonic:` configurations must remove switch-only options such as `restore_mode` or `inverted`.
 

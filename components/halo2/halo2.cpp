@@ -28,10 +28,12 @@ void Halo2::setup() {
     saved_mode_ = SavedMode::BOTH;
   LampState initial;
   initial.set_selection(saved_mode_ & SavedMode::FRONT, saved_mode_ & SavedMode::BACK);
-  for (auto *light : lights_) light->restore_into(initial);
+  initial.front_brightness = initial_brightness_[0];
+  initial.back_brightness = initial_brightness_[1];
+  light_->restore_into(initial);
   lamp_state_.restore(initial);
   save_mode_();
-  publish_lights_();
+  publish_light_();
   // Read the sensor's enable/timeout settings from the lamp before accepting
   // commands. Restoring a UI default must not disable the sensor on boot.
 
@@ -246,6 +248,9 @@ void Halo2::dump_config() {
   ESP_LOGCONFIG(TAG, "  Frequency: %u MHz", protocol::RADIO_BASE_FREQUENCY_MHZ + radio_channel_);
   ESP_LOGCONFIG(TAG, "  Command debounce: %" PRIu32 " ms", commands_.debounce());
   LOG_UPDATE_INTERVAL(this);
+  LOG_NUMBER("  ", "Front brightness", brightness_numbers_[0]);
+  LOG_NUMBER("  ", "Back brightness", brightness_numbers_[1]);
+  LOG_SELECT("  ", "Lighting mode", section_select_);
   LOG_SELECT("  ", "Ultrasonic sensor", ultrasonic_select_);
 }
 
@@ -319,7 +324,7 @@ bool Halo2::apply_received_(const protocol::ReceivedPacket &received) {
   const bool persisted = link_preference_.save(&saved);
   if (changed) {
     save_mode_();
-    publish_lights_();
+    publish_light_();
     publish_ultrasonic_();
   }
   status_clear_warning();
@@ -381,7 +386,7 @@ void Halo2::receive_packet_() {
   }
   const auto reply =
       status_poll_.on_reply(received.pcf & protocol::PCF_PID_MASK, received.command == Command::STATUS, millis());
-  if (reply != StatusPoll::Reply::STATE || lights_transitioning_()) return;
+  if (reply != StatusPoll::Reply::STATE || light_transitioning_()) return;
   apply_received_(received);
   const auto &state = received.state;
   ESP_LOGD(TAG, "Lamp status: power %s, mode %u/%u, front %u%%, back %u%%, %u K, ultrasonic %s, timeout %u min",
@@ -400,7 +405,7 @@ void Halo2::poll_status_() {
       publish_status_("Lamp status unavailable; retaining last known state");
     }
   }
-  if (!status_poll_.due(now) || lights_transitioning_() || !radio_.idle()) return;
+  if (!status_poll_.due(now) || light_transitioning_() || !radio_.idle()) return;
   ESP_LOGD(TAG, "%s lamp status", status_poll_.reading() ? "Reading" : "Refreshing");
   const std::array<protocol::AirFrame, 1> frames{make_frame_(Command::STATUS)};
   if (send_batch_(frames, TxOwner::STATUS_POLL)) {

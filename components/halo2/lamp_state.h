@@ -40,6 +40,22 @@ struct LampState {
   }
   bool is_on(Section section) const { return power && selected(section); }
   uint8_t brightness(Section section) const { return section == Section::FRONT ? front_brightness : back_brightness; }
+  uint8_t master_brightness() const {
+    return std::max(selected(Section::FRONT) ? front_brightness : uint8_t{0},
+                    selected(Section::BACK) ? back_brightness : uint8_t{0});
+  }
+
+  void set_master_brightness(uint8_t percent, const LampState &basis) {
+    // A zero master level means OFF; it must not erase the wake profile.
+    if (percent == 0) return;
+    percent = std::min(percent, MAX_BRIGHTNESS_PERCENT);
+    const uint16_t peak = std::max(basis.master_brightness(), MIN_BRIGHTNESS_PERCENT);
+    for (auto section : {Section::FRONT, Section::BACK}) {
+      if (selected(section))
+        set_brightness(section, std::max<uint16_t>(MIN_BRIGHTNESS_PERCENT,
+                          (uint16_t(basis.brightness(section)) * percent + peak / 2) / peak));
+    }
+  }
 
   void set_selection(bool front, bool back) {
     // There is no wire selection for neither section. Retain the last mode.
@@ -51,13 +67,6 @@ struct LampState {
     if (percent != 0)
       (section == Section::FRONT ? front_brightness : back_brightness) =
           std::clamp(percent, MIN_BRIGHTNESS_PERCENT, MAX_BRIGHTNESS_PERCENT);
-  }
-  void set_light(Section section, bool on, uint8_t percent) {
-    bool front = is_on(Section::FRONT), back = is_on(Section::BACK);
-    (section == Section::FRONT ? front : back) = on && percent != 0;
-    power = front || back;
-    set_selection(front, back);
-    set_brightness(section, percent);
   }
 };
 
@@ -74,17 +83,7 @@ class LampStateModel {
   }
   void request(const LampState &state) { requested_ = state; }
   bool receive_request(const LampState &state) { return apply_received_(state); }
-  bool receive_status(const LampState &state) {
-    auto reconciled = state;
-    // Settings packets only apply brightness to selected sections. Keep an
-    // inactive section's requested level for its next ON. A new baseline
-    // uses all received values, as do original-controller snapshots.
-    if (initialized_) {
-      if (!state.selected(Section::FRONT)) reconciled.front_brightness = requested_.front_brightness;
-      if (!state.selected(Section::BACK)) reconciled.back_brightness = requested_.back_brightness;
-    }
-    return apply_received_(reconciled);
-  }
+  bool receive_status(const LampState &state) { return apply_received_(state); }
   void invalidate() { initialized_ = false; }
 
  private:
