@@ -64,15 +64,15 @@ bool Halo2Light::transitioning() const {
   return state_->is_transformer_active() || state_->current_values != state_->remote_values;
 }
 
-void Halo2::control_light(Halo2Light &source) {
+void Halo2::control_light() {
   if (!accepts_commands()) return;
   auto requested = lamp_state_.requested();
-  source.read_into(requested);
+  light_->read_into(requested);
   request_state_(requested);
   publish_brightness_();
   // Canonicalize integer brightness/25 K temperature, and repair a zero
   // brightness OFF so plain ON can restore the retained profile.
-  if (!source.transitioning()) source.publish(requested);
+  if (!light_->transitioning()) light_->publish(requested);
 }
 
 void Halo2::control_brightness(Section section, float value) {
@@ -101,8 +101,6 @@ void Halo2::control_selection(size_t index) {
   request_state_(requested);
   publish_light_();
 }
-
-bool Halo2::light_transitioning_() const { return light_->transitioning(); }
 
 void Halo2::publish_brightness_() {
   const auto &state = lamp_state_.requested();

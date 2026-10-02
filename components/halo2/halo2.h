@@ -52,7 +52,7 @@ class Halo2 : public PollingComponent {
   void start_auto_brightness();
 
   bool accepts_commands() const { return lifecycle_.active(); }
-  void control_light(Halo2Light &source);
+  void control_light();
   void control_brightness(Section section, float value);
   void control_selection(size_t index);
   void control_ultrasonic(size_t index);
@@ -67,7 +67,6 @@ class Halo2 : public PollingComponent {
   static constexpr uint32_t RECOVERY_INITIAL_DELAY_MS = 1000;
 
   void request_state_(const LampState &requested);
-  bool light_transitioning_() const;
   void publish_light_();
   void publish_brightness_();
   void publish_ultrasonic_();
@@ -148,12 +147,12 @@ class Halo2Light : public light::LightOutput, public Parented<Halo2> {
     // Capture local commands immediately, before polling can receive a packet.
     // The guard also prevents received state from becoming a new transmission.
     local_write_ = !reflecting_state_ && parent_->accepts_commands();
-    if (local_write_) parent_->control_light(*this);
+    if (local_write_) parent_->control_light();
   }
   void write_state(light::LightState *) override {
     // ESPHome installs the final transition values after update_state().
     // Reconcile those here, retaining the origin of the deferred write.
-    if (local_write_) parent_->control_light(*this);
+    if (local_write_) parent_->control_light();
     local_write_ = false;
   }
 

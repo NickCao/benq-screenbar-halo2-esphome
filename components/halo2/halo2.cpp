@@ -386,7 +386,7 @@ void Halo2::receive_packet_() {
   }
   const auto reply =
       status_poll_.on_reply(received.pcf & protocol::PCF_PID_MASK, received.command == Command::STATUS, millis());
-  if (reply != StatusPoll::Reply::STATE || light_transitioning_()) return;
+  if (reply != StatusPoll::Reply::STATE || light_->transitioning()) return;
   apply_received_(received);
   const auto &state = received.state;
   ESP_LOGD(TAG, "Lamp status: power %s, mode %u/%u, front %u%%, back %u%%, %u K, ultrasonic %s, timeout %u min",
@@ -405,7 +405,7 @@ void Halo2::poll_status_() {
       publish_status_("Lamp status unavailable; retaining last known state");
     }
   }
-  if (!status_poll_.due(now) || light_transitioning_() || !radio_.idle()) return;
+  if (!status_poll_.due(now) || light_->transitioning() || !radio_.idle()) return;
   ESP_LOGD(TAG, "%s lamp status", status_poll_.reading() ? "Reading" : "Refreshing");
   const std::array<protocol::AirFrame, 1> frames{make_frame_(Command::STATUS)};
   if (send_batch_(frames, TxOwner::STATUS_POLL)) {
