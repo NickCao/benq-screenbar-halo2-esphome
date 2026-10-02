@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "board": "Waveshare ESP32-S3-LR1121-HF (4 MB flash, 2 MB quad PSRAM)",
+  "scope": "Passive ambient reception using the ESP32 Wi-Fi RF front end; no confirmed controller action sequence or paired reference capture.",
+  "crc_validation": "Offline only: polynomial 0x1021, initial 0xFFFF, MSB first, no reflection/final XOR; covers 32 address bits plus first 89 following bits, compared with last 16 bits.",
+  "current_firmware_provenance": {
+    "sources": {
+      "esp-sdr": {
+        "repository": "ESPARGOS/esp-sdr",
+        "commit": "550fadea4d00a9e26ce921c5832167becb3dc20c"
+      },
+      "esp-dsp": {
+        "repository": "espressif/esp-dsp",
+        "commit": "a53a0756833c045311ea1d79a2badf495cdfde4c"
+      },
+      "upstream_idf_commit": "25fe69f946311abdaf9ad56591f25fedbc20ac98",
+      "experiment_idf_version": "5.5.5"
+    },
+    "archive_sha256": {
+      "esp-sdr": "1acb81cb5548e67773e6f39d1c2a73b5668b2369c14099d579afbba0d73f5219",
+      "esp-dsp": "9f0dab85ddd6d1702a7f832e12b5a05ea46276e8fc1201c9e70a962692dc2ce8"
+    },
+    "experiment_sha256": "82516e0a14deea9298db3a5f7876d7db56802f96c9d0679c1897f03bec358703"
+  },
+  "runs": [
+    {
+      "label": "baseline-10s",
+      "requested_seconds": 10,
+      "local_log": "captures/20261002T023011Z.jsonl",
+      "log_sha256": "9260643135c3897b9582dd9dcf5142021d03d048c2b73c9b9b32875a2f991aec",
+      "info": {
+        "kind": "info",
+        "utc": "2026-10-02T02:30:12.232983+00:00",
+        "port": "/dev/ttyACM0",
+        "firmware": {
+          "backend": "esp32s3-iq",
+          "build": "5e0e82414406",
+          "frequency_mhz": 2405,
+          "sample_rate": 16000000,
+          "bitrate": 125000,
+          "sync": "CE8C234F",
+          "following_bits": 105,
+          "min_power": 64.0,
+          "lr1121_reset": true,
+          "crc_checked": false
+        }
+      },
+      "capture_totals": {
+        "windows": 408,
+        "samples": 14945914,
+        "capture_error_batches": 0,
+        "capture_error_details": []
+      },
+      "candidates": [
+        {
+          "kind": "candidate",
+          "utc": "2026-10-02T02:30:18.104726+00:00",
+          "batch": 59,
+          "window": 2,
+          "sync": "CE8C234F",
+          "start_us": 639.78,
+          "samples_per_bit": 7.99929,
+          "offset_hz": -15339,
+          "deviation_hz": 143561,
+          "sync_error": 0.1152,
+          "power": 50667.6,
+          "inverted": false,
+          "bits": 105,
+          "complete": true,
+          "raw": "290218850546050546008142C100",
+          "offline_crc": {
+            "calculated": "8582",
+            "received": "8582",
+            "valid": true
+          }
+        }
+      ],
+      "summary": {
+        "kind": "summary",
+        "utc": "2026-10-02T02:30:22.302925+00:00",
+        "batches": 102,
+        "candidates": 1,
+        "complete": 1,
+        "rf_us": 934113,
+        "firmware_elapsed_us": 9929855,
+        "duty_percent": 9.407116216702057
+      }
+    },
+    {
+      "label": "baseline-60s",
+      "requested_seconds": 60,
+      "local_log": "captures/20261002T023104Z.jsonl",
+      "log_sha256": "784e1ed77d127e76209ff36affbd264388dd511039b8bc2d452dc3bbbece10cc",
+      "info": {
+        "kind": "info",
+        "utc": "2026-10-02T02:31:05.559682+00:00",
+        "port": "/dev/ttyACM0",
+        "firmware": {
+          "backend": "esp32s3-iq",
+          "build": "5e0e82414406",
+          "frequency_mhz": 2405,
+          "sample_rate": 16000000,
+          "bitrate": 125000,
+          "sync": "CE8C234F",
+          "following_bits": 105,
+          "min_power": 64.0,
+          "lr1121_reset": true,
+          "crc_checked": false
+        }
+      },
+      "capture_totals": {
+        "windows": 2352,
+        "samples": 86158847,
+        "capture_error_batches": 0,
+        "capture_error_details": []
+      },
+      "candidates": [
+        {
+          "kind": "candidate",
+          "utc": "2026-10-02T02:31:12.363927+00:00",
+          "batch": 15,
+          "window": 15,
+          "sync": "CE8C234F",
+          "start_us": 1142.69,
+          "samples_per_bit": 7.99901,
+          "offset_hz": -27700,
+          "deviation_hz": 150874,
+          "sync_error": 0.0537,
+          "power": 65535.0,
+          "inverted": false,
+          "bits": 105,
+          "complete": true,
+          "raw": "2A82188505460505460083161F00",
+          "offline_crc": {
+            "calculated": "ECBB",
+            "received": "2C3E",
+            "valid": false
+          }
+        }
+      ],
+      "summary": {
+        "kind": "summary",
+        "utc": "2026-10-02T02:32:05.838355+00:00",
+        "batches": 147,
+        "candidates": 1,
+        "complete": 1,
+        "rf_us": 5384899,
+        "firmware_elapsed_us": 60035991,
+        "duty_percent": 8.9694513412796
+      }
+    },
+    {
+      "label": "optimized-30s",
+      "requested_seconds": 30,
+      "local_log": "captures/20261002T120750Z.jsonl",
+      "log_sha256": "c324eec8919fbb5f5cfbeba07c0c195642983b312adbfbf6a8afa1ae315ef10f",
+      "info": {
+        "kind": "info",
+        "utc": "2026-10-02T12:07:51.805852+00:00",
+        "port": "/dev/ttyACM0",
+        "firmware": {
+          "backend": "esp32s3-iq",
+          "build": "82516e0a14de",
+          "frequency_mhz": 2405,
+          "sample_rate": 16000000,
+          "bitrate": 125000,
+          "sync": "CE8C234F",
+          "following_bits": 105,
+          "min_power": 64.0,
+          "lr1121_reset": true,
+          "crc_checked": false
+        }
+      },
+      "capture_totals": {
+        "windows": 1616,
+        "samples": 59197485,
+        "capture_error_batches": 0,
+        "capture_error_details": []
+      },
+      "candidates": [
+        {
+          "kind": "candidate",
+          "utc": "2026-10-02T12:08:07.767439+00:00",
+          "batch": 53,
+          "window": 6,
+          "sync": "CE8C234F",
+          "start_us": 64.11,
+          "samples_per_bit": 7.992,
+          "offset_hz": -15591,
+          "deviation_hz": 144044,
+          "sync_error": 0.0948,
+          "power": 48432.1,
+          "inverted": false,
+          "bits": 105,
+          "bit_margin_min": 0.8028,
+          "timing_error_rms": 0.1873,
+          "complete": true,
+          "raw": "290218850546050546008142C100",
+          "offline_crc": {
+            "calculated": "8582",
+            "received": "8582",
+            "valid": true
+          }
+        }
+      ],
+      "summary": {
+        "kind": "summary",
+        "utc": "2026-10-02T12:08:21.960309+00:00",
+        "batches": 101,
+        "candidates": 1,
+        "complete": 1,
+        "rf_us": 3699826,
+        "firmware_elapsed_us": 29969878,
+        "duty_percent": 12.345148685623611
+      }
+    },
+    {
+      "label": "post-flash-10s",
+      "requested_seconds": 10,
+      "local_log": "captures/20261002T121008Z.jsonl",
+      "log_sha256": "a6c6d68ba8c950bbd7714ea3a8b1a40ffb81d72598d5f5ac6676456e0c2723d1",
+      "info": {
+        "kind": "info",
+        "utc": "2026-10-02T12:10:10.102099+00:00",
+        "port": "/dev/ttyACM0",
+        "reset_on_connect": true,
+        "firmware": {
+          "backend": "esp32s3-iq",
+          "build": "82516e0a14de",
+          "frequency_mhz": 2405,
+          "sample_rate": 16000000,
+          "bitrate": 125000,
+          "sync": "CE8C234F",
+          "following_bits": 105,
+          "min_power": 64.0,
+          "lr1121_reset": true,
+          "crc_checked": false
+        }
+      },
+      "capture_totals": {
+        "windows": 480,
+        "samples": 17583458,
+        "capture_error_batches": 0,
+        "capture_error_details": []
+      },
+      "candidates": [],
+      "summary": {
+        "kind": "summary",
+        "utc": "2026-10-02T12:10:20.155700+00:00",
+        "batches": 30,
+        "candidates": 0,
+        "complete": 0,
+        "rf_us": 1098960,
+        "firmware_elapsed_us": 10001770,
+        "duty_percent": 10.98765518503225
+      }
+    }
+  ]
+}

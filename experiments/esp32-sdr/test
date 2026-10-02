@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+experiment_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+test_dir="$(mktemp -d "${TMPDIR:-/tmp}/halo-sdr-tests.XXXXXX")"
+trap 'rm -rf -- "$test_dir"' EXIT
+"${CC:-cc}" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -I "$experiment_dir" \
+  -c "$experiment_dir/demod.c" -o "$test_dir/demod.o"
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -I "$experiment_dir" \
+  "$experiment_dir/tests/demod_test.cpp" "$test_dir/demod.o" -lm -o "$test_dir/demod_test"
+"$test_dir/demod_test"

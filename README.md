@@ -117,6 +117,7 @@ Upload updates and view logs with:
 | [`scripts/esphome`](scripts/esphome) | Podman wrapper used locally and by CI |
 | [`scripts/test`](scripts/test), [`tests/`](tests/README.md) | Native model and coordinator regression tests |
 | [`tests/hardware/`](tests/hardware/) | Opt-in pytest checks against a deployed bridge and lamp |
+| [`experiments/esp32-sdr/`](experiments/esp32-sdr/) | Standalone ESP32-S3 I/Q reception and raw packet-detection experiment |
 | [`secrets.example.yaml`](secrets.example.yaml) | Credential template |
 | [`home-assistant/dashboard.yaml`](home-assistant/dashboard.yaml) | Optional HA dashboard |
 | [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | Component options, manual addressing, and dashboard setup |

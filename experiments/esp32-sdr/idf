@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+experiment_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+project_dir="$(cd -- "$experiment_dir/../.." && pwd)"
+python3 "$experiment_dir/prepare.py"
+
+idf_args=(
+  -C "$experiment_dir/.work/firmware"
+  -B "$experiment_dir/.work/build"
+  -DIDF_TARGET=esp32s3
+  "-DSDKCONFIG=$experiment_dir/.work/build/sdkconfig"
+  "-DSDKCONFIG_DEFAULTS=$experiment_dir/.work/firmware/sdkconfig.defaults.esp32s3"
+)
+if [[ -n "${IDF_PATH:-}" ]]; then
+  exec python3 "$IDF_PATH/tools/idf.py" "${idf_args[@]}" "$@"
+fi
+
+# Reuse the toolchain already installed by scripts/esphome, without changing
+# the production firmware build or SDK cache. The same absolute mount path
+# keeps CMake's generated paths identical across build, size and flash calls.
+cache_dir="$project_dir/.esphome/cache"
+if [[ ! -f "$cache_dir/idf/frameworks/5.5.5/tools/idf.py" ]]; then
+  printf '%s\n' 'Activate ESP-IDF 5.5.5, or populate this repository’s ESPHome SDK cache first.' >&2
+  exit 1
+fi
+container=(run --rm --network host --volume "$project_dir:$project_dir:z" --volume "$cache_dir:/cache:z"
+  --workdir "$experiment_dir" --entrypoint bash)
+if [[ -t 0 ]]; then container+=(-i); fi
+if [[ -t 1 ]]; then container+=(-t); fi
+if [[ -n "${SDR_SERIAL_DEVICE:-}" ]]; then
+  container+=(--device "$SDR_SERIAL_DEVICE" --group-add keep-groups)
+fi
+exec podman "${container[@]}" ghcr.io/esphome/esphome:2026.9.0 -c '
+  export IDF_PATH=/cache/idf/frameworks/5.5.5
+  export IDF_TOOLS_PATH=/cache/idf
+  export IDF_PYTHON_ENV_PATH=/cache/idf/penvs/5.5.5
+  export IDF_COMPONENT_MANAGER=0
+  export ESP_ROM_ELF_DIR=/cache/idf/tools/esp-rom-elfs/20241011
+  export PATH="$IDF_PYTHON_ENV_PATH/bin:/cache/idf/tools/cmake/3.30.2/bin:/cache/idf/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin:$PATH"
+  exec python "$IDF_PATH/tools/idf.py" "$@"
+' bash "${idf_args[@]}" "$@"

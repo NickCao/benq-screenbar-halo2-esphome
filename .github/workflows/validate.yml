@@ -27,6 +27,8 @@ jobs:
       - uses: actions/checkout@v5
       - name: Test bridge models and coordinator
         run: ./scripts/test
+      - name: Test experimental SDR demodulation
+        run: ./experiments/esp32-sdr/test
       - uses: actions/cache@v4
         with:
           path: .esphome/cache

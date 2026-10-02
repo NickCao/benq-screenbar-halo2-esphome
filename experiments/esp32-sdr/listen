@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+experiment_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+project_dir="$(cd -- "$experiment_dir/../.." && pwd)"
+serial_device="${SDR_SERIAL_DEVICE:-/dev/ttyACM0}"
+exec podman run --rm --network none \
+  --device "$serial_device" --group-add keep-groups \
+  --volume "$project_dir:$project_dir:z" \
+  --entrypoint python3 ghcr.io/esphome/esphome:2026.9.0 \
+  "$experiment_dir/capture.py" --port "$serial_device" "$@"
