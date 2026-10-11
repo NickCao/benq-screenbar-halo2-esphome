@@ -10,6 +10,8 @@ static sdr_demod_t *halo_demod;
 static sdr_config_t halo_config = {.sync_word = 0xCE8C234F, .following_bits = 105, .min_power = 64};
 static unsigned halo_window, halo_candidates, halo_complete;
 
+#include "halo_tx.inc"
+
 static void halo_board_init(void) {
     // Waveshare ESP32-S3-LR1121-HF: never initialize or transmit with LR1121.
     // Assert reset and deselect SPI before starting the ESP32 receiver.
@@ -47,15 +49,18 @@ static void halo_packet(const sdr_packet_t *packet, void *context) {
 }
 
 static bool halo_command(const char *line) {
+    if (halo_tx_command(line)) return true;
     unsigned count; uint32_t word; float power; char extra;
     if (!strcmp(line, "HALOINFO?")) {
-        char out[320];
+        char out[512];
         snprintf(out, sizeof(out),
             "HALOINFO {\"backend\":\"esp32s3-iq\",\"build\":\"" HALO_BUILD_ID "\",\"frequency_mhz\":%u,"
             "\"sample_rate\":%u,\"bitrate\":125000,\"sync\":\"%08" PRIX32 "\","
-            "\"following_bits\":%u,\"min_power\":%.1f,\"lr1121_reset\":true,\"crc_checked\":false}\n",
+            "\"following_bits\":%u,\"min_power\":%.1f,\"lr1121_reset\":true,\"crc_checked\":false,"
+            "\"tx_backend\":\"esp32s3-pll\",\"tx_modulation\":\"FSK\",\"tx_update_rate\":%u,\"tx_gain_code\":%u,\"tx_inverted\":%s}\n",
             frequency_mhz, SDR_INPUT_RATE, halo_config.sync_word,
-            halo_config.following_bits, (double)halo_config.min_power);
+            halo_config.following_bits, (double)halo_config.min_power, SDR_TX_RATE, halo_tx_gain,
+            halo_tx_inverted ? "true" : "false");
         reply(out);
         return true;
     }

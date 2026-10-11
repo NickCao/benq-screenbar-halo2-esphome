@@ -77,5 +77,6 @@ provide a packet-loss estimate.
 provenance, complete candidate records, offline CRC results, aggregate capture
 counts, and summaries for these four runs. Full local JSONL logs remain in the
 ignored `captures/` directory; their SHA-256 hashes are recorded in the report.
-The current firmware digest is `82516e0a14de`; the earlier baseline digest
-identifies observations made before the detector optimization.
+The RX-only firmware validated here has digest `82516e0a14de`; the earlier
+baseline digest identifies observations made before the detector optimization.
+The later TX extension is recorded separately in [TX_VALIDATION.md](TX_VALIDATION.md).

@@ -8,3 +8,9 @@ trap 'rm -rf -- "$test_dir"' EXIT
 "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -I "$experiment_dir" \
   "$experiment_dir/tests/demod_test.cpp" "$test_dir/demod.o" -lm -o "$test_dir/demod_test"
 "$test_dir/demod_test"
+"${CC:-cc}" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -I "$experiment_dir" \
+  -c "$experiment_dir/tx.c" -o "$test_dir/tx.o"
+"${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -I "$experiment_dir" \
+  "$experiment_dir/tests/tx_test.cpp" "$test_dir/tx.o" "$test_dir/demod.o" -lm -o "$test_dir/tx_test"
+"$test_dir/tx_test"
+python3 "$experiment_dir/tests/tx_tool_test.py"

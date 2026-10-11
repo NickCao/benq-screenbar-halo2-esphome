@@ -48,16 +48,21 @@ def main():
     WORK.mkdir(exist_ok=True)
     lock = json.loads((ROOT / "upstream.json").read_text())
     sources, hashes = {}, {}
-    for name in ["esp-sdr", "esp-dsp"]:
+    for name in ["esp-sdr", "esp-dsp", "esp32-sdr-trx"]:
         sources[name], hashes[name] = fetch(name, lock[name])
     firmware = WORK / "firmware"
     shutil.copytree(sources["esp-sdr"], firmware, dirs_exist_ok=True)
     shutil.copytree(sources["esp-dsp"], firmware / "components" / "esp-dsp", dirs_exist_ok=True)
     experiment = firmware / "main" / "experiment"
     experiment.mkdir(exist_ok=True)
-    for name in ["demod.c", "demod.h"]:
+    for name in ["demod.c", "demod.h", "tx.c", "tx.h"]:
         shutil.copy2(ROOT / name, experiment / name)
-    shutil.copy2(ROOT / "firmware" / "halo_experiment.inc", experiment)
+    for path in sorted((ROOT / "firmware").glob("*.inc")):
+        shutil.copy2(path, experiment)
+    vendor = ROOT / "vendor" / "esp32-sdr-trx"
+    if (vendor / "lo_plan.h").read_bytes() != (sources["esp32-sdr-trx"] / "firmware/src/lo_plan.h").read_bytes():
+        raise RuntimeError("Vendored LO planner differs from pinned esp32-sdr-trx")
+    shutil.copytree(vendor, experiment / "vendor/esp32-sdr-trx", dirs_exist_ok=True)
     receiver = firmware / "main" / "targets" / "esp32s3" / "receiver.c"
     text = receiver.read_text()
     text = replace_once(text, "static void handle_command(char *line) {",
@@ -84,13 +89,14 @@ def main():
     ring = firmware / "main" / "common" / "ring_capture.c"
     ring.write_text(replace_once(ring.read_text(),
                                 "#define TXQ_SIZE 16384u /* 7 frames of 2048 bins, 56 of 256 */",
-                                "#define TXQ_SIZE 8192u /* Experiment: bounded spectrum output queue. */"))
+                                "#define TXQ_SIZE 4096u /* Experiment: bounded spectrum output queue. */"))
     cmake = firmware / "main" / "CMakeLists.txt"
-    cmake.write_text(replace_once(cmake.read_text(), "set(dependencies esp_phy", "set(dependencies esp_driver_gpio esp_phy")
-                     + '\ntarget_sources(${COMPONENT_LIB} PRIVATE "experiment/demod.c")\n'
+    cmake.write_text(replace_once(cmake.read_text(), "set(dependencies esp_phy", "set(dependencies esp_driver_gpio esp_driver_spi esp_phy")
+                     + '\ntarget_sources(${COMPONENT_LIB} PRIVATE "experiment/demod.c" "experiment/tx.c")\n'
                        'target_include_directories(${COMPONENT_LIB} PRIVATE "experiment")\n')
     experiment_digest = hashlib.sha256()
-    for path in [ROOT / "demod.c", ROOT / "demod.h", ROOT / "firmware" / "halo_experiment.inc",
+    for path in [ROOT / "demod.c", ROOT / "demod.h", ROOT / "tx.c", ROOT / "tx.h",
+                 *sorted((ROOT / "firmware").glob("*.inc")), vendor / "lo_plan.h",
                  ROOT / "prepare.py", ROOT / "upstream.json"]:
         experiment_digest.update(path.read_bytes())
     (experiment / "halo_version.h").write_text(f'#define HALO_BUILD_ID "{experiment_digest.hexdigest()[:12]}"\n')

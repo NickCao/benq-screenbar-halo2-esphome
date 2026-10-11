@@ -36,6 +36,23 @@ def command(port, text, expected):
             raise RuntimeError(f"{text}: {line}")
 
 
+def open_port(device, no_reset=False):
+    """Connect through native USB using the ESP-IDF monitor reset sequence."""
+    port = serial.Serial(baudrate=2000000, timeout=.25, write_timeout=5)
+    port.dtr = port.rts = True
+    port.port = device
+    port.open()
+    if not no_reset:
+        port.rts = False
+        port.dtr = False
+        port.rts = True
+        time.sleep(.2)
+        port.rts = False
+    time.sleep(1)
+    port.reset_input_buffer()
+    return port
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", required=True)
@@ -62,17 +79,7 @@ def main():
     output.parent.mkdir(parents=True, exist_ok=True)
     # Match idf_monitor's native USB Serial/JTAG connection sequence. A fresh
     # flash can leave the direct-FIFO transport silent until a startup reset.
-    port = serial.Serial(baudrate=2000000, timeout=.25, write_timeout=5)
-    port.dtr = port.rts = True
-    port.port = args.port
-    port.open()
-    if not args.no_reset:
-        port.rts = False
-        port.dtr = False
-        port.rts = True
-        time.sleep(.2)
-        port.rts = False
-    time.sleep(1)  # Allow USB/firmware startup before sending the first command.
+    port = open_port(args.port, args.no_reset)
     with port, output.open("x") as journal:
         def save(kind, data):
             row = {"kind": kind, "utc": datetime.now(timezone.utc).isoformat(), **data}
