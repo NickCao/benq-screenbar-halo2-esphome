@@ -1,7 +1,9 @@
 #include "halo2.h"
 
 #include <algorithm>
+#include <array>
 #include <cinttypes>
+#include <type_traits>
 #include "esphome/core/application.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
@@ -176,8 +178,11 @@ void Halo2::process_discovery_() {
   const uint32_t previous_count = radio_.capture_count();
   const bool found = radio_.poll_address(address, received);
   if (radio_.capture_count() != previous_count) {
+#if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_VERBOSE
     const auto &data = radio_.capture_data();
-    ESP_LOGV(TAG, "Discovery RX: %s", format_hex_pretty(data.data(), data.size()).c_str());
+    char hex[format_hex_pretty_size(std::tuple_size<std::decay_t<decltype(data)>>::value)];
+    ESP_LOGV(TAG, "Discovery RX: %s", format_hex_pretty_to(hex, data.data(), data.size()));
+#endif
   }
   if (found) {
     const auto &state = received.state;
@@ -350,14 +355,17 @@ void Halo2::receive_packet_() {
   const uint32_t previous_rx_count = radio_.rx_count();
   const bool received_state = radio_.poll(received);
   if (radio_.rx_count() != previous_rx_count) {
+#if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_DEBUG
     const auto &frame = radio_.rx_frame();
     // Read header bytes directly so rejected packets still show their actual
     // command and control bits. State validation must not filter diagnostics.
     const uint8_t pcf = static_cast<uint8_t>((frame[0] << 1U) | (frame[1] >> 7U));
     const uint8_t command = static_cast<uint8_t>((frame[1] << 1U) | (frame[2] >> 7U));
     const uint8_t control = static_cast<uint8_t>((frame[2] << 1U) | (frame[3] >> 7U));
+    char hex[format_hex_pretty_size(std::tuple_size<std::decay_t<decltype(frame)>>::value)];
     ESP_LOGD(TAG, "RX air frame: %s, PCF %02X, command %02X, control %02X, decoded %s",
-             format_hex_pretty(frame.data(), frame.size()).c_str(), pcf, command, control, YESNO(received_state));
+             format_hex_pretty_to(hex, frame.data(), frame.size()), pcf, command, control, YESNO(received_state));
+#endif
   }
   if (!received_state) {
     if (const char *error = radio_.last_error()) {
